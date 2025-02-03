@@ -47,6 +47,7 @@ func (c *Client) ReadLoop(sv *SocketServer) {
 			Data: data,
 		}
 	}
+	log.Println("read done")
 }
 
 func (c *Client) WriteLoop(sv *SocketServer) {
@@ -75,6 +76,7 @@ func (c *Client) WriteLoop(sv *SocketServer) {
 			break
 		}
 	}
+	log.Println("write done")
 }
 
 type SocketServer struct {
