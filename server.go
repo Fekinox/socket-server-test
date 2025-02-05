@@ -60,6 +60,8 @@ type Client struct {
 	conn             *websocket.Conn
 	server           *SocketServer
 	outboundMessages chan Message
+
+	username string
 }
 
 func (s *SocketServer) Run() {
@@ -70,6 +72,10 @@ func (s *SocketServer) Run() {
 				break
 			}
 			log.Println(m)
+			m.Client.outboundMessages <- Message{
+				Type: websocket.TextMessage,
+				Data: []byte(m.Client.username),
+			}
 			m.Client.outboundMessages <- m.Message
 		case <-s.shutdown:
 			log.Println("Shutting down WebSocket server...")
@@ -95,11 +101,12 @@ func (s *SocketServer) QueueShutdown() {
 	s.shutdown <- struct{}{}
 }
 
-func (s *SocketServer) OpenClient(conn *websocket.Conn) *Client {
+func (s *SocketServer) OpenClient(conn *websocket.Conn, username string) *Client {
 	c := &Client{
 		conn:             conn,
 		server:           s,
 		outboundMessages: make(chan Message, 256),
+		username: username,
 	}
 
 	s.register <- c
@@ -186,7 +193,8 @@ func (s *SocketServer) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.TokenManager.ValidateToken(token); err != nil {
+	payload, err := s.TokenManager.ValidateToken(token)
+	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -197,7 +205,7 @@ func (s *SocketServer) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c := s.OpenClient(conn)
+	c := s.OpenClient(conn, payload.Username)
 
 	go c.ReadLoop(s)
 	go c.WriteLoop(s)
@@ -221,7 +229,7 @@ func (s *SocketServer) CreateToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	token, err := s.TokenManager.GenerateToken()
+	token, err := s.TokenManager.GenerateToken(body.Username)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
