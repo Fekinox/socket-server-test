@@ -44,6 +44,9 @@ func (t *TokenManager) GenerateToken() (string, error) {
 	if err := b64Enc.Close(); err != nil {
 		return "", err
 	}
+
+	tok := sb.String()
+	t.activeTokens[tok] = time.Now()
 	return sb.String(), nil
 }
 

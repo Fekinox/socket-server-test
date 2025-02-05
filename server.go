@@ -180,13 +180,22 @@ func (c *Client) WriteLoop(sv *SocketServer) {
 }
 
 func (s *SocketServer) ServeWS(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		w.WriteHeader(http.StatusBadRequest)	
+		return
+	}
+
+	if err := s.TokenManager.ValidateToken(token); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println(err)
 		return
 	}
-
-	log.Println("upgraded")
 
 	c := s.OpenClient(conn)
 
