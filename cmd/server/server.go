@@ -2,17 +2,20 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/Fekinox/socket-server-test/pkg/message"
 )
 
 const (
 	WRITE_WAIT_TIME = 10 * time.Second
-	PONG_WAIT_TIME = 60 * time.Second
+	PONG_WAIT_TIME = 10 * time.Second
 	PING_PERIOD = (PONG_WAIT_TIME * 9)/10
 )
 
@@ -23,43 +26,40 @@ var upgrader = websocket.Upgrader{
 }
 
 type SocketServer struct {
-	clients   map[*Client]struct{}
+	clients   map[*ClientConn]struct{}
 
 	shutdown chan struct{}
-	register chan *Client
-	unregister chan *Client
+	register chan *ClientConn
+	unregister chan *ClientConn
 
 	messages chan ClientMessage
+	broadcast chan message.Message
 
 	TokenManager *TokenManager
 }
 
 func NewSocketServer() *SocketServer {
 	return &SocketServer{
-		clients: make(map[*Client]struct{}),
+		clients: make(map[*ClientConn]struct{}),
 		shutdown: make(chan struct{}),
-		register: make(chan *Client),
-		unregister: make(chan *Client),
+		register: make(chan *ClientConn),
+		unregister: make(chan *ClientConn),
 		messages: make(chan ClientMessage),
+		broadcast: make(chan message.Message),
 
 		TokenManager: NewTokenManager(),
 	}
 }
 
-type Message struct {
-	Type int
-	Data []byte
-}
-
 type ClientMessage struct {
-	Message
-	Client *Client
+	message.Message
+	Client *ClientConn
 }
 
-type Client struct {
+type ClientConn struct {
 	conn             *websocket.Conn
 	server           *SocketServer
-	outboundMessages chan Message
+	outboundMessages chan message.Message
 
 	username string
 }
@@ -71,12 +71,13 @@ func (s *SocketServer) Run() {
 			if !ok {
 				break
 			}
-			log.Println(m)
-			m.Client.outboundMessages <- Message{
-				Type: websocket.TextMessage,
-				Data: []byte(m.Client.username),
+			msg := fmt.Sprintf("%s: %s", m.Client.username, m.Data)
+			for c, _ := range s.clients {
+				c.outboundMessages <- message.Message{
+					Type: websocket.TextMessage,
+					Data: []byte(msg),
+				}
 			}
-			m.Client.outboundMessages <- m.Message
 		case <-s.shutdown:
 			log.Println("Shutting down WebSocket server...")
 			for c, _ := range s.clients {
@@ -87,6 +88,7 @@ func (s *SocketServer) Run() {
 		case c := <-s.register:
 			s.clients[c] = struct{}{}
 			log.Printf("Registered new client (%v)", len(s.clients))
+
 		case c := <-s.unregister:
 			if _, ok := s.clients[c]; ok {
 				delete(s.clients, c)
@@ -101,11 +103,11 @@ func (s *SocketServer) QueueShutdown() {
 	s.shutdown <- struct{}{}
 }
 
-func (s *SocketServer) OpenClient(conn *websocket.Conn, username string) *Client {
-	c := &Client{
+func (s *SocketServer) OpenClient(conn *websocket.Conn, username string) *ClientConn {
+	c := &ClientConn{
 		conn:             conn,
 		server:           s,
-		outboundMessages: make(chan Message, 256),
+		outboundMessages: make(chan message.Message, 256),
 		username: username,
 	}
 
@@ -113,12 +115,12 @@ func (s *SocketServer) OpenClient(conn *websocket.Conn, username string) *Client
 	return c
 }
 
-func (c *Client) Close() {
+func (c *ClientConn) Close() {
 	c.server.unregister <- c
 	c.conn.Close()
 }
 
-func (c *Client) ReadLoop(sv *SocketServer) {
+func (c *ClientConn) ReadLoop(sv *SocketServer) {
 	defer c.Close()
 
 	c.conn.SetReadDeadline(time.Now().Add(PONG_WAIT_TIME))
@@ -140,7 +142,7 @@ func (c *Client) ReadLoop(sv *SocketServer) {
 		}
 
 		c.server.messages <- ClientMessage{
-			Message: Message{
+			Message: message.Message{
 				Type: typ,
 				Data: data,
 			},
@@ -150,7 +152,7 @@ func (c *Client) ReadLoop(sv *SocketServer) {
 	log.Println("read done")
 }
 
-func (c *Client) WriteLoop(sv *SocketServer) {
+func (c *ClientConn) WriteLoop(sv *SocketServer) {
 	t := time.NewTicker(PING_PERIOD)
 	defer func() {
 		t.Stop()
