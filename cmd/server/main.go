@@ -56,6 +56,5 @@ func main() {
 		log.Fatal("Forced to shutdown: ", err)
 	}
 
-
 	fmt.Println("Successfully exited")
 }

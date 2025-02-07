@@ -81,7 +81,7 @@ func (s *SocketServer) Run() {
 		case <-s.shutdown:
 			log.Println("Shutting down WebSocket server...")
 			for c, _ := range s.clients {
-	c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Shutting down"))
+				c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Shutting down"))
 			}
 			break
 		case c := <-s.register:
