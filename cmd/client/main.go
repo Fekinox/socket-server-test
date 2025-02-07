@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Fekinox/socket-server-test/pkg/message"
 	"github.com/gorilla/websocket"
 )
 
@@ -20,7 +21,7 @@ func main() {
 	signal.Notify(interrupt, os.Interrupt, os.Kill, syscall.SIGTERM, syscall.SIGINT)
 
 	cl := Client{
-		Host: "localhost:3000",
+		Host:     "localhost:3000",
 		Username: *username,
 	}
 	err := cl.Connect()
@@ -36,12 +37,12 @@ func main() {
 	go func() {
 		defer close(done)
 		for {
-			_, msg, err := cl.conn.ReadMessage()
+			msg, err := cl.ReadMessage()
 			if err != nil {
 				log.Println("read:", err)
 				return
 			}
-			log.Printf("recv: %s", msg)
+			log.Printf("recv: %s", msg.Data)
 		}
 	}()
 
@@ -59,9 +60,10 @@ func main() {
 			if !ok {
 				return
 			}
-			err := cl.conn.WriteMessage(
-				websocket.TextMessage,
-				[]byte(ln))
+			err := cl.WriteMessage(message.Message{
+				Type: websocket.TextMessage,
+				Data: []byte(ln),
+			})
 			if err != nil {
 				return
 			}

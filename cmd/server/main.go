@@ -15,9 +15,9 @@ import (
 )
 
 func main() {
-	server := NewSocketServer()
-	go server.Run()
-	defer server.QueueShutdown()
+	ws := NewSocketServer()
+	go ws.Run()
+	defer ws.QueueShutdown()
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -25,20 +25,19 @@ func main() {
 		w.Write([]byte("welcome"))
 	})
 
-	r.Get("/ws", server.ServeWS)
+	r.Get("/ws", ws.ServeWS)
 
-	r.Post("/create-token", server.CreateToken)
+	r.Post("/create-token", ws.CreateToken)
 
 	addr := fmt.Sprintf(":%v", 3000)
 
 	srv := &http.Server{
-		Addr: addr,
+		Addr:    addr,
 		Handler: r,
 	}
 
 	go func() {
-		if err := srv.ListenAndServe();
-			err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("listen: %s\n", err)
 		}
 	}()
@@ -47,6 +46,8 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
+
+	ws.QueueShutdown()
 	fmt.Println("Shutting down...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -54,6 +55,7 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Fatal("Forced to shutdown: ", err)
 	}
+
 
 	fmt.Println("Successfully exited")
 }

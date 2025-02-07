@@ -11,10 +11,18 @@ import (
 )
 
 type Client struct {
-	Host string
+	Host     string
 	Username string
 
-	conn *websocket.Conn
+	conn      *websocket.Conn
+	connected bool
+
+	inboundMessages  chan message.Message
+	outboundMessages chan message.Message
+}
+
+func (c *Client) Run() error {
+	return nil
 }
 
 func (c *Client) Connect() error {
@@ -29,8 +37,8 @@ func (c *Client) Connect() error {
 
 	tokenUrl := url.URL{
 		Scheme: "http",
-		Host: c.Host,
-		Path: "/create-token",
+		Host:   c.Host,
+		Path:   "/create-token",
 	}
 
 	resp, err := http.Post(tokenUrl.String(), "application/json", &buf)
@@ -48,8 +56,8 @@ func (c *Client) Connect() error {
 
 	u := url.URL{
 		Scheme: "ws",
-		Host: c.Host,
-		Path: "/ws",
+		Host:   c.Host,
+		Path:   "/ws",
 	}
 	q := u.Query()
 	q.Set("token", token.Token)
@@ -68,4 +76,8 @@ func (c *Client) ReadMessage() (message.Message, error) {
 		Type: typ,
 		Data: msg,
 	}, nil
+}
+
+func (c *Client) WriteMessage(m message.Message) error {
+	return c.conn.WriteMessage(m.Type, m.Data)
 }

@@ -15,8 +15,8 @@ import (
 
 const (
 	WRITE_WAIT_TIME = 10 * time.Second
-	PONG_WAIT_TIME = 10 * time.Second
-	PING_PERIOD = (PONG_WAIT_TIME * 9)/10
+	PONG_WAIT_TIME  = 60 * time.Second
+	PING_PERIOD     = (PONG_WAIT_TIME * 9) / 10
 )
 
 var upgrader = websocket.Upgrader{
@@ -26,13 +26,13 @@ var upgrader = websocket.Upgrader{
 }
 
 type SocketServer struct {
-	clients   map[*ClientConn]struct{}
+	clients map[*ClientConn]struct{}
 
-	shutdown chan struct{}
-	register chan *ClientConn
+	shutdown   chan struct{}
+	register   chan *ClientConn
 	unregister chan *ClientConn
 
-	messages chan ClientMessage
+	messages  chan ClientMessage
 	broadcast chan message.Message
 
 	TokenManager *TokenManager
@@ -40,12 +40,12 @@ type SocketServer struct {
 
 func NewSocketServer() *SocketServer {
 	return &SocketServer{
-		clients: make(map[*ClientConn]struct{}),
-		shutdown: make(chan struct{}),
-		register: make(chan *ClientConn),
+		clients:    make(map[*ClientConn]struct{}),
+		shutdown:   make(chan struct{}),
+		register:   make(chan *ClientConn),
 		unregister: make(chan *ClientConn),
-		messages: make(chan ClientMessage),
-		broadcast: make(chan message.Message),
+		messages:   make(chan ClientMessage),
+		broadcast:  make(chan message.Message),
 
 		TokenManager: NewTokenManager(),
 	}
@@ -81,8 +81,7 @@ func (s *SocketServer) Run() {
 		case <-s.shutdown:
 			log.Println("Shutting down WebSocket server...")
 			for c, _ := range s.clients {
-				c.conn.Close()
-				close(c.outboundMessages)
+	c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Shutting down"))
 			}
 			break
 		case c := <-s.register:
@@ -103,21 +102,23 @@ func (s *SocketServer) QueueShutdown() {
 	s.shutdown <- struct{}{}
 }
 
-func (s *SocketServer) OpenClient(conn *websocket.Conn, username string) *ClientConn {
+func (s *SocketServer) OpenClientConn(conn *websocket.Conn, username string) {
 	c := &ClientConn{
 		conn:             conn,
 		server:           s,
 		outboundMessages: make(chan message.Message, 256),
-		username: username,
+		username:         username,
 	}
 
 	s.register <- c
-	return c
+
+	go c.ReadLoop(s)
+	go c.WriteLoop(s)
 }
 
 func (c *ClientConn) Close() {
 	c.server.unregister <- c
-	c.conn.Close()
+	c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Closed"))
 }
 
 func (c *ClientConn) ReadLoop(sv *SocketServer) {
@@ -149,7 +150,7 @@ func (c *ClientConn) ReadLoop(sv *SocketServer) {
 			Client: c,
 		}
 	}
-	log.Println("read done")
+	fmt.Println("closed")
 }
 
 func (c *ClientConn) WriteLoop(sv *SocketServer) {
@@ -191,7 +192,7 @@ func (c *ClientConn) WriteLoop(sv *SocketServer) {
 func (s *SocketServer) ServeWS(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
 	if token == "" {
-		w.WriteHeader(http.StatusBadRequest)	
+		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
@@ -203,19 +204,15 @@ func (s *SocketServer) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println(err)
 		return
 	}
 
-	c := s.OpenClient(conn, payload.Username)
-
-	go c.ReadLoop(s)
-	go c.WriteLoop(s)
+	s.OpenClientConn(conn, payload.Username)
 }
 
 func (s *SocketServer) CreateToken(w http.ResponseWriter, r *http.Request) {
 	// Parse body
-	var body struct{
+	var body struct {
 		Username string `json:"username" required:"true"`
 	}
 

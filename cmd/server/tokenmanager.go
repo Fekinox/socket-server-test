@@ -12,22 +12,22 @@ import (
 
 type TokenPayload struct {
 	CreationTime time.Time
-	Username string
+	Username     string
 }
 
 const (
-	TOKEN_EXPIRATION_TIME = 5 * time.Minute
+	TOKEN_EXPIRATION_TIME  = 5 * time.Minute
 	MAX_TOKEN_GEN_ATTEMPTS = 5
 )
 
 var (
 	ErrNonexistentToken = errors.New("Token does not exist")
-	ErrExpiredToken = errors.New("Token has expired")
-	ErrTooManyAttempts = errors.New("Token generation failed after too many attempts")
+	ErrExpiredToken     = errors.New("Token has expired")
+	ErrTooManyAttempts  = errors.New("Token generation failed after too many attempts")
 )
 
 type TokenManager struct {
-	mu sync.Mutex
+	mu           sync.Mutex
 	activeTokens map[string]TokenPayload
 }
 
@@ -70,7 +70,7 @@ func (t *TokenManager) GenerateToken(username string) (string, error) {
 
 	t.activeTokens[tok] = TokenPayload{
 		CreationTime: time.Now(),
-		Username: username,
+		Username:     username,
 	}
 
 	return tok, nil
@@ -100,7 +100,7 @@ func (t *TokenManager) PruneTokens() {
 	defer t.mu.Unlock()
 
 	var toPrune []string
-	for t, p:= range t.activeTokens {
+	for t, p := range t.activeTokens {
 		if time.Now().Sub(p.CreationTime) > TOKEN_EXPIRATION_TIME {
 			toPrune = append(toPrune, t)
 		}
