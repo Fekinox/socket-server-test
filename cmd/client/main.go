@@ -23,28 +23,21 @@ func main() {
 	cl := Client{
 		Host:     "localhost:3000",
 		Username: *username,
+
+		inboundMessages:  make(chan message.Message, 256),
+		outboundMessages: make(chan message.Message, 256),
+		errors:           make(chan error, 256),
+		done:             make(chan struct{}),
 	}
-	err := cl.Connect()
+	err := cl.EnsureConnected()
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer cl.conn.Close()
 
-	done := make(chan struct{})
+	go cl.Run()
 
 	lines := make(chan string, 256)
-
-	go func() {
-		defer close(done)
-		for {
-			msg, err := cl.ReadMessage()
-			if err != nil {
-				log.Println("read:", err)
-				return
-			}
-			log.Printf("recv: %s", msg.Data)
-		}
-	}()
 
 	go func() {
 		defer close(lines)
@@ -60,29 +53,24 @@ func main() {
 			if !ok {
 				return
 			}
-			err := cl.WriteMessage(message.Message{
+			cl.WriteMessage(message.Message{
 				Type: websocket.TextMessage,
 				Data: []byte(ln),
 			})
-			if err != nil {
-				return
-			}
-		case <-done:
-			return
 		case <-interrupt:
-			err := cl.conn.WriteMessage(
-				websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			cl.Quit()
 			if err != nil {
 				log.Println("write close: ", err)
 				return
 			}
 
 			select {
-			case <-done:
+			case <-cl.done:
 			case <-time.After(time.Second):
 			}
 
+			return
+		case <-cl.done:
 			return
 		default:
 		}

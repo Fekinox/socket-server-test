@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -26,7 +28,7 @@ var upgrader = websocket.Upgrader{
 }
 
 type SocketServer struct {
-	clients map[*ClientConn]struct{}
+	clients map[string]*ClientConn
 
 	shutdown   chan struct{}
 	register   chan *ClientConn
@@ -36,19 +38,13 @@ type SocketServer struct {
 	broadcast chan message.Message
 
 	TokenManager *TokenManager
+
+	lobbies map[string]Lobby
 }
 
-func NewSocketServer() *SocketServer {
-	return &SocketServer{
-		clients:    make(map[*ClientConn]struct{}),
-		shutdown:   make(chan struct{}),
-		register:   make(chan *ClientConn),
-		unregister: make(chan *ClientConn),
-		messages:   make(chan ClientMessage),
-		broadcast:  make(chan message.Message),
-
-		TokenManager: NewTokenManager(),
-	}
+type Lobby struct {
+	name    string
+	clients map[*ClientConn]struct{}
 }
 
 type ClientMessage struct {
@@ -58,10 +54,26 @@ type ClientMessage struct {
 
 type ClientConn struct {
 	conn             *websocket.Conn
+	connected        bool
 	server           *SocketServer
 	outboundMessages chan message.Message
 
 	username string
+	lobby    *Lobby
+}
+
+func NewSocketServer() *SocketServer {
+	return &SocketServer{
+		clients:    make(map[string]*ClientConn),
+		shutdown:   make(chan struct{}),
+		register:   make(chan *ClientConn),
+		unregister: make(chan *ClientConn),
+		messages:   make(chan ClientMessage),
+		broadcast:  make(chan message.Message),
+
+		TokenManager: NewTokenManager(),
+		lobbies:      make(map[string]Lobby),
+	}
 }
 
 func (s *SocketServer) Run() {
@@ -71,26 +83,50 @@ func (s *SocketServer) Run() {
 			if !ok {
 				break
 			}
-			msg := fmt.Sprintf("%s: %s", m.Client.username, m.Data)
-			for c, _ := range s.clients {
-				c.outboundMessages <- message.Message{
+
+			tokens := strings.Fields(string(m.Data))
+			switch tokens[0] {
+			case "lobbies":
+				for ln, lb := range s.lobbies {
+					m.Client.outboundMessages <- message.Message{
+						Type: websocket.TextMessage,
+						Data: []byte(fmt.Sprintf("%s (%d)", ln, len(lb.clients))),
+					}
+				}
+			case "status":
+				m.Client.outboundMessages <- message.Message{
 					Type: websocket.TextMessage,
-					Data: []byte(msg),
+					Data: []byte("not in any lobbies"),
+				}
+			case "new":
+				lobbyName := s.CreateLobby()
+				m.Client.outboundMessages <- message.Message{
+					Type: websocket.TextMessage,
+					Data: []byte(fmt.Sprintf("Created lobby %s", lobbyName)),
 				}
 			}
 		case <-s.shutdown:
 			log.Println("Shutting down WebSocket server...")
-			for c, _ := range s.clients {
-				c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Shutting down"))
+			for _, c := range s.clients {
+				c.conn.WriteMessage(
+					websocket.CloseMessage,
+					websocket.FormatCloseMessage(
+						websocket.CloseGoingAway,
+						"Shutting down",
+					))
 			}
 			break
 		case c := <-s.register:
-			s.clients[c] = struct{}{}
+			if _, ok := s.clients[c.username]; ok {
+				continue
+			}
+			s.clients[c.username] = c
+			c.connected = true
 			log.Printf("Registered new client (%v)", len(s.clients))
 
 		case c := <-s.unregister:
-			if _, ok := s.clients[c]; ok {
-				delete(s.clients, c)
+			if _, ok := s.clients[c.username]; ok {
+				delete(s.clients, c.username)
 				close(c.outboundMessages)
 				log.Printf("Unregistered client (%v)", len(s.clients))
 			}
@@ -133,12 +169,14 @@ func (c *ClientConn) ReadLoop(sv *SocketServer) {
 	for {
 		typ, msg, err := c.conn.NextReader()
 		if err != nil {
+			log.Printf("%v: %v", c, err)
 			c.conn.Close()
 			break
 		}
 
 		data, err := io.ReadAll(msg)
 		if err != nil {
+			log.Printf("%v: %v", c, err)
 			continue
 		}
 
@@ -150,7 +188,6 @@ func (c *ClientConn) ReadLoop(sv *SocketServer) {
 			Client: c,
 		}
 	}
-	fmt.Println("closed")
 }
 
 func (c *ClientConn) WriteLoop(sv *SocketServer) {
@@ -237,4 +274,30 @@ func (s *SocketServer) CreateToken(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"token": token,
 	})
+}
+
+func (s *SocketServer) CreateLobby() string {
+	l := Lobby{
+		clients: map[*ClientConn]struct{}{},
+	}
+
+	name := ""
+	for {
+		if name != "" {
+			if _, ok := s.lobbies[name]; !ok {
+				break
+			}
+		}
+
+		var sb strings.Builder
+		for range 4 {
+			sb.WriteRune(rune(rand.Intn(26)) + 'A')
+		}
+		name = sb.String()
+	}
+
+	l.name = name
+	s.lobbies[name] = l
+
+	return name
 }
