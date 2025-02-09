@@ -42,11 +42,6 @@ type SocketServer struct {
 	lobbies map[string]Lobby
 }
 
-type Lobby struct {
-	name    string
-	clients map[*ClientConn]struct{}
-}
-
 type ClientMessage struct {
 	message.Message
 	Client *ClientConn
@@ -59,7 +54,13 @@ type ClientConn struct {
 	outboundMessages chan message.Message
 
 	username string
-	lobby    *Lobby
+	lobby    string
+}
+
+type Lobby struct {
+	name    string
+	clients map[string]struct{}
+	host    string
 }
 
 func NewSocketServer() *SocketServer {
@@ -99,11 +100,13 @@ func (s *SocketServer) Run() {
 					Data: []byte("not in any lobbies"),
 				}
 			case "new":
+				s.RemoveClientFromTheirLobby(m.Client)
 				lobbyName := s.CreateLobby()
 				m.Client.outboundMessages <- message.Message{
 					Type: websocket.TextMessage,
 					Data: []byte(fmt.Sprintf("Created lobby %s", lobbyName)),
 				}
+				s.AddClientToLobby(m.Client, lobbyName)
 			}
 		case <-s.shutdown:
 			log.Println("Shutting down WebSocket server...")
@@ -278,7 +281,7 @@ func (s *SocketServer) CreateToken(w http.ResponseWriter, r *http.Request) {
 
 func (s *SocketServer) CreateLobby() string {
 	l := Lobby{
-		clients: map[*ClientConn]struct{}{},
+		clients: map[string]struct{}{},
 	}
 
 	name := ""
@@ -300,4 +303,33 @@ func (s *SocketServer) CreateLobby() string {
 	s.lobbies[name] = l
 
 	return name
+}
+
+func (s *SocketServer) RemoveClientFromTheirLobby(c *ClientConn) {
+	lb, ok := s.lobbies[c.lobby]
+	if !ok {
+		return
+	}
+	delete(lb.clients, c.username)
+	if len(lb.clients) == 0 {
+		delete(s.lobbies, lb.name)
+		return
+	} else if lb.host == c.username {
+		for n, _ := range lb.clients {
+			lb.host = n
+			break
+		}
+	}
+}
+
+func (s *SocketServer) AddClientToLobby(c *ClientConn, l string) {
+	lb, ok := s.lobbies[l]
+	if !ok {
+		return
+	}
+	if len(lb.clients) == 0 {
+		lb.host = c.username
+	}
+	lb.clients[c.username] = struct{}{}
+	c.lobby = l
 }
