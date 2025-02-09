@@ -107,6 +107,22 @@ func (s *SocketServer) Run() {
 					Data: []byte(fmt.Sprintf("Created lobby %s", lobbyName)),
 				}
 				s.AddClientToLobby(m.Client, lobbyName)
+			case "join":
+				if len(tokens) < 2 {
+					m.Client.outboundMessages <- message.Message{
+						Type: websocket.TextMessage,
+						Data: []byte("Must provide lobby"),
+					}
+				}
+				lb, ok := s.lobbies[tokens[1]]
+				if !ok {
+					m.Client.outboundMessages <- message.Message{
+						Type: websocket.TextMessage,
+						Data: []byte(fmt.Sprintf("Lobby %s does not exist", tokens[1])),
+					}
+				}
+				s.AddClientToLobby(m.Client, lb.name)
+
 			}
 		case <-s.shutdown:
 			log.Println("Shutting down WebSocket server...")
@@ -279,6 +295,7 @@ func (s *SocketServer) CreateToken(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// TODO: Decouple the raw WebSocket communications code from the higher-level lobby management code
 func (s *SocketServer) CreateLobby() string {
 	l := Lobby{
 		clients: map[string]struct{}{},
