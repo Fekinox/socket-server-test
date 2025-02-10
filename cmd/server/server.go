@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -28,7 +29,7 @@ var upgrader = websocket.Upgrader{
 }
 
 type SocketServer struct {
-	clients map[string]*ClientConn
+	clientConns map[string]*ClientConn
 
 	shutdown   chan struct{}
 	register   chan *ClientConn
@@ -65,12 +66,12 @@ type Lobby struct {
 
 func NewSocketServer() *SocketServer {
 	return &SocketServer{
-		clients:    make(map[string]*ClientConn),
-		shutdown:   make(chan struct{}),
-		register:   make(chan *ClientConn),
-		unregister: make(chan *ClientConn),
-		messages:   make(chan ClientMessage),
-		broadcast:  make(chan message.Message),
+		clientConns: make(map[string]*ClientConn),
+		shutdown:    make(chan struct{}),
+		register:    make(chan *ClientConn),
+		unregister:  make(chan *ClientConn),
+		messages:    make(chan ClientMessage),
+		broadcast:   make(chan message.Message),
 
 		TokenManager: NewTokenManager(),
 		lobbies:      make(map[string]Lobby),
@@ -126,7 +127,7 @@ func (s *SocketServer) Run() {
 			}
 		case <-s.shutdown:
 			log.Println("Shutting down WebSocket server...")
-			for _, c := range s.clients {
+			for _, c := range s.clientConns {
 				c.conn.WriteMessage(
 					websocket.CloseMessage,
 					websocket.FormatCloseMessage(
@@ -136,18 +137,18 @@ func (s *SocketServer) Run() {
 			}
 			break
 		case c := <-s.register:
-			if _, ok := s.clients[c.username]; ok {
+			if _, ok := s.clientConns[c.username]; ok {
 				continue
 			}
-			s.clients[c.username] = c
+			s.clientConns[c.username] = c
 			c.connected = true
-			log.Printf("Registered new client (%v)", len(s.clients))
+			log.Printf("Registered new client (%v)", len(s.clientConns))
 
 		case c := <-s.unregister:
-			if _, ok := s.clients[c.username]; ok {
-				delete(s.clients, c.username)
+			if _, ok := s.clientConns[c.username]; ok {
+				delete(s.clientConns, c.username)
 				close(c.outboundMessages)
-				log.Printf("Unregistered client (%v)", len(s.clients))
+				log.Printf("Unregistered client (%v)", len(s.clientConns))
 			}
 		}
 	}
@@ -176,6 +177,8 @@ func (c *ClientConn) Close() {
 	c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Closed"))
 }
 
+// Reader pump. Reads messages from the underlying WebSocket connection and forwards them to the server,
+// while also recording the client who sent the message. Will halt once the underlying connection fails.
 func (c *ClientConn) ReadLoop(sv *SocketServer) {
 	defer c.Close()
 
@@ -209,6 +212,8 @@ func (c *ClientConn) ReadLoop(sv *SocketServer) {
 	}
 }
 
+// Writer pump. Receives messages from the server and forwards them to the underlying WebSocket connection.
+// Will halt once the underlying connection fails, or once the server closes.
 func (c *ClientConn) WriteLoop(sv *SocketServer) {
 	t := time.NewTicker(PING_PERIOD)
 	defer func() {
@@ -245,6 +250,10 @@ func (c *ClientConn) WriteLoop(sv *SocketServer) {
 	}
 }
 
+// Initiates a new WebSocket connection.
+// Query parameters:
+// * `token`: Authentication token received from the backend. If not present or invalid,
+// rejects with a 400 error.
 func (s *SocketServer) ServeWS(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
 	if token == "" {
@@ -266,6 +275,9 @@ func (s *SocketServer) ServeWS(w http.ResponseWriter, r *http.Request) {
 	s.OpenClientConn(conn, payload.Username)
 }
 
+// Creates a token for use in initiating a WebSocket connection. Clients are expected to
+// handshake by requesting a token from the backend and then using that token to initiate a
+// connection.
 func (s *SocketServer) CreateToken(w http.ResponseWriter, r *http.Request) {
 	// Parse body
 	var body struct {
@@ -273,12 +285,7 @@ func (s *SocketServer) CreateToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err := json.NewDecoder(r.Body).Decode(&body)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	if body.Username == "" {
+	if err != nil || body.Username == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
