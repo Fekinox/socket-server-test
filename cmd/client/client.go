@@ -58,6 +58,10 @@ type Client struct {
 }
 
 func (c *Client) Run() error {
+	if err := c.EnsureConnected(); err != nil {
+		return err
+	}
+
 	go c.ReadLoop()
 	go c.WriteLoop()
 
@@ -224,8 +228,11 @@ func (c *Client) connect() error {
 	}
 
 	resp, err := http.Post(tokenUrl.String(), "application/json", &buf)
-	if err != nil || resp.StatusCode != http.StatusOK {
+	if err != nil {
 		return err
+	}
+	if resp.StatusCode != http.StatusCreated {
+		return errors.New(resp.Status)
 	}
 
 	var token struct {
