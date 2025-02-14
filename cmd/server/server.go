@@ -2,13 +2,13 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
 	"math/rand"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -31,6 +31,9 @@ var upgrader = websocket.Upgrader{
 type SocketServer struct {
 	clientConns map[string]*ClientConn
 
+	isShuttingDown bool
+	done           chan struct{}
+
 	shutdown   chan struct{}
 	register   chan *ClientConn
 	unregister chan *ClientConn
@@ -49,8 +52,9 @@ type ClientMessage struct {
 }
 
 type ClientConn struct {
+	closed           bool
+	closedMu         sync.Mutex
 	conn             *websocket.Conn
-	connected        bool
 	server           *SocketServer
 	outboundMessages chan message.Message
 
@@ -75,87 +79,106 @@ func NewSocketServer() *SocketServer {
 
 		TokenManager: NewTokenManager(),
 		lobbies:      make(map[string]Lobby),
+		done:         make(chan struct{}),
 	}
 }
 
 func (s *SocketServer) Run() {
+outer:
 	for {
+		if s.isShuttingDown && len(s.clientConns) == 0 {
+			break outer
+		} else {
+			log.Println(len(s.clientConns))
+		}
 		select {
 		case m, ok := <-s.messages:
 			if !ok {
 				break
 			}
 
-			tokens := strings.Fields(string(m.Data))
-			switch tokens[0] {
-			case "lobbies":
-				for ln, lb := range s.lobbies {
-					m.Client.outboundMessages <- message.Message{
-						Type: websocket.TextMessage,
-						Data: []byte(fmt.Sprintf("%s (%d)", ln, len(lb.clients))),
-					}
-				}
-			case "status":
-				m.Client.outboundMessages <- message.Message{
-					Type: websocket.TextMessage,
-					Data: []byte("not in any lobbies"),
-				}
-			case "new":
-				s.RemoveClientFromTheirLobby(m.Client)
-				lobbyName := s.CreateLobby()
-				m.Client.outboundMessages <- message.Message{
-					Type: websocket.TextMessage,
-					Data: []byte(fmt.Sprintf("Created lobby %s", lobbyName)),
-				}
-				s.AddClientToLobby(m.Client, lobbyName)
-			case "join":
-				if len(tokens) < 2 {
-					m.Client.outboundMessages <- message.Message{
-						Type: websocket.TextMessage,
-						Data: []byte("Must provide lobby"),
-					}
-				}
-				lb, ok := s.lobbies[tokens[1]]
-				if !ok {
-					m.Client.outboundMessages <- message.Message{
-						Type: websocket.TextMessage,
-						Data: []byte(fmt.Sprintf("Lobby %s does not exist", tokens[1])),
-					}
-				}
-				s.AddClientToLobby(m.Client, lb.name)
+			s.HandleMessage(m)
 
-			}
-		case <-s.shutdown:
-			log.Println("Shutting down WebSocket server...")
-			for _, c := range s.clientConns {
-				c.conn.WriteMessage(
-					websocket.CloseMessage,
-					websocket.FormatCloseMessage(
-						websocket.CloseGoingAway,
-						"Shutting down",
-					))
-			}
-			break
 		case c := <-s.register:
 			if _, ok := s.clientConns[c.username]; ok {
-				continue
+				log.Printf("Client %v already exists", c.username)
+				go c.Close()
+				continue outer
 			}
 			s.clientConns[c.username] = c
-			c.connected = true
 			log.Printf("Registered new client (%v)", len(s.clientConns))
 
+			go c.ReadLoop(s)
+			go c.WriteLoop(s)
+
 		case c := <-s.unregister:
-			if _, ok := s.clientConns[c.username]; ok {
-				delete(s.clientConns, c.username)
-				close(c.outboundMessages)
-				log.Printf("Unregistered client (%v)", len(s.clientConns))
+			log.Println("unregistering", c)
+			if v, ok := s.clientConns[c.username]; ok {
+				if v == c {
+					delete(s.clientConns, c.username)
+					close(c.outboundMessages)
+					log.Printf("Unregistered client (%v)", len(s.clientConns))
+				}
 			}
+
+		case <-s.shutdown:
+			log.Println("Shutting down WebSocket server...")
+			s.isShuttingDown = true
+			for _, c := range s.clientConns {
+				log.Println("closing", c)
+				go c.Close()
+			}
+			log.Println("Ordered all connections to close")
 		}
 	}
+	close(s.done)
+	log.Println("main loop done")
 }
 
 func (s *SocketServer) QueueShutdown() {
 	s.shutdown <- struct{}{}
+}
+
+func (s *SocketServer) HandleMessage(m ClientMessage) {
+	tokens := strings.Fields(string(m.Data))
+	switch tokens[0] {
+	case "lobbies":
+		for ln, lb := range s.lobbies {
+			m.Client.outboundMessages <- message.Message{
+				Type: websocket.TextMessage,
+				Data: []byte(fmt.Sprintf("%s (%d)", ln, len(lb.clients))),
+			}
+		}
+	case "status":
+		m.Client.outboundMessages <- message.Message{
+			Type: websocket.TextMessage,
+			Data: []byte("not in any lobbies"),
+		}
+	case "new":
+		s.RemoveClientFromTheirLobby(m.Client)
+		lobbyName := s.CreateLobby()
+		m.Client.outboundMessages <- message.Message{
+			Type: websocket.TextMessage,
+			Data: []byte(fmt.Sprintf("Created lobby %s", lobbyName)),
+		}
+		s.AddClientToLobby(m.Client, lobbyName)
+	case "join":
+		if len(tokens) < 2 {
+			m.Client.outboundMessages <- message.Message{
+				Type: websocket.TextMessage,
+				Data: []byte("Must provide lobby"),
+			}
+		}
+		lb, ok := s.lobbies[tokens[1]]
+		if !ok {
+			m.Client.outboundMessages <- message.Message{
+				Type: websocket.TextMessage,
+				Data: []byte(fmt.Sprintf("Lobby %s does not exist", tokens[1])),
+			}
+		}
+		s.AddClientToLobby(m.Client, lb.name)
+
+	}
 }
 
 func (s *SocketServer) OpenClientConn(conn *websocket.Conn, username string) {
@@ -167,14 +190,29 @@ func (s *SocketServer) OpenClientConn(conn *websocket.Conn, username string) {
 	}
 
 	s.register <- c
-
-	go c.ReadLoop(s)
-	go c.WriteLoop(s)
 }
 
 func (c *ClientConn) Close() {
+	log.Println("locking")
+	c.closedMu.Lock()
+	defer func() {
+		log.Println("unlocking")
+		c.closedMu.Unlock()
+		log.Println("close done")
+	}()
+
+	if c.closed {
+		return
+	}
+
 	c.server.unregister <- c
-	c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Closed"))
+	log.Println("unregister done")
+	err := c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Closed"))
+	if err != nil {
+		c.conn.Close()
+	}
+	c.closed = true
+
 }
 
 // Reader pump. Reads messages from the underlying WebSocket connection and forwards them to the server,
@@ -210,6 +248,7 @@ func (c *ClientConn) ReadLoop(sv *SocketServer) {
 			Client: c,
 		}
 	}
+	log.Println("read closed")
 }
 
 // Writer pump. Receives messages from the server and forwards them to the underlying WebSocket connection.
@@ -221,33 +260,35 @@ func (c *ClientConn) WriteLoop(sv *SocketServer) {
 		c.Close()
 	}()
 
+outer:
 	for {
 		select {
 		case msg, ok := <-c.outboundMessages:
 			c.conn.SetWriteDeadline(time.Now().Add(WRITE_WAIT_TIME))
 			if !ok {
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
-				break
+				break outer
 			}
 
 			w, err := c.conn.NextWriter(msg.Type)
 			if err != nil {
-				return
+				break outer
 			}
 
 			w.Write(msg.Data)
 
 			if err := w.Close(); err != nil {
-				return
+				break outer
 			}
 
 		case <-t.C:
 			c.conn.SetWriteDeadline(time.Now().Add(WRITE_WAIT_TIME))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				return
+				break outer
 			}
 		}
 	}
+	log.Println("write closed")
 }
 
 // Initiates a new WebSocket connection.
@@ -296,7 +337,7 @@ func (s *SocketServer) CreateToken(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]any{
 		"token": token,
 	})

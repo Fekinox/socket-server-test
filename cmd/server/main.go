@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	// "runtime"
 	"syscall"
 	"time"
 
@@ -17,7 +18,6 @@ import (
 func main() {
 	ws := NewSocketServer()
 	go ws.Run()
-	defer ws.QueueShutdown()
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -40,6 +40,7 @@ func main() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("listen: %s\n", err)
 		}
+		log.Println("server done")
 	}()
 
 	// Wait for interrupt to gracefully shut down the server
@@ -57,4 +58,5 @@ func main() {
 	}
 
 	fmt.Println("Successfully exited")
+	// close(done)
 }

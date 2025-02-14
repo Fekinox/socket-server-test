@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"flag"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -29,13 +28,9 @@ func main() {
 		errors:           make(chan error, 256),
 		done:             make(chan struct{}),
 	}
-	err := cl.EnsureConnected()
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer cl.conn.Close()
 
 	go cl.Run()
+	defer cl.Quit()
 
 	lines := make(chan string, 256)
 
@@ -59,10 +54,6 @@ func main() {
 			})
 		case <-interrupt:
 			cl.Quit()
-			if err != nil {
-				log.Println("write close: ", err)
-				return
-			}
 
 			select {
 			case <-cl.done:
@@ -72,7 +63,6 @@ func main() {
 			return
 		case <-cl.done:
 			return
-		default:
 		}
 	}
 }

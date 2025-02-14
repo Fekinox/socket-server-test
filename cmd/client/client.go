@@ -96,9 +96,16 @@ func (c *Client) Run() error {
 		case im, ok := <-c.inboundMessages:
 			_, _ = im, ok
 		case err := <-c.errors:
-			close(c.outboundMessages)
-			close(c.done)
-			return err
+			var wsError *websocket.CloseError
+			if errors.As(err, &wsError) {
+				switch wsError.Code {
+				case websocket.CloseGoingAway:
+					log.Println("stopping loop")
+					close(c.outboundMessages)
+					close(c.done)
+					return err
+				}
+			}
 		}
 	}
 }
@@ -106,6 +113,10 @@ func (c *Client) Run() error {
 func (c *Client) Quit() {
 	c.connectedMu.Lock()
 	defer c.connectedMu.Unlock()
+
+	if c.connected == ClientQuit {
+		return
+	}
 
 	if c.connected == Connected {
 		err := c.conn.WriteMessage(
@@ -119,7 +130,6 @@ func (c *Client) Quit() {
 		}
 	}
 
-	close(c.done)
 	c.connected = ClientQuit
 }
 
@@ -130,8 +140,17 @@ func (c *Client) ReadLoop() {
 		}
 
 		for {
+			log.Println("attempting read")
 			typ, msg, err := c.conn.ReadMessage()
 			if err != nil {
+				func() {
+					c.connectedMu.Lock()
+					defer c.connectedMu.Unlock()
+
+					if c.connected == Connected {
+						c.connected = Disconnected
+					}
+				}()
 				break
 			}
 
@@ -154,17 +173,41 @@ func (c *Client) WriteLoop() {
 		for {
 			msg, ok := <-c.outboundMessages
 			if !ok {
+				func() {
+					c.connectedMu.Lock()
+					defer c.connectedMu.Unlock()
+
+					if c.connected == Connected {
+						c.connected = Disconnected
+					}
+				}()
 				break
 			}
 
 			w, err := c.conn.NextWriter(msg.Type)
 			if err != nil {
+				func() {
+					c.connectedMu.Lock()
+					defer c.connectedMu.Unlock()
+
+					if c.connected == Connected {
+						c.connected = Disconnected
+					}
+				}()
 				break
 			}
 
 			w.Write(msg.Data)
 
 			if err := w.Close(); err != nil {
+				func() {
+					c.connectedMu.Lock()
+					defer c.connectedMu.Unlock()
+
+					if c.connected == Connected {
+						c.connected = Disconnected
+					}
+				}()
 				break
 			}
 		}
@@ -180,6 +223,7 @@ func (c *Client) EnsureConnected() error {
 
 	switch c.connected {
 	case Connected:
+		log.Println("already connected")
 		return nil
 	case ServerDead:
 		return ErrServerDead
