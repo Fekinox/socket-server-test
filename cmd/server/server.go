@@ -114,11 +114,18 @@ outer:
 		case c := <-s.unregister:
 			log.Println("unregistering", c)
 			if v, ok := s.clientConns[c.username]; ok {
-				if v == c {
-					delete(s.clientConns, c.username)
-					close(c.outboundMessages)
-					log.Printf("Unregistered client (%v)", len(s.clientConns))
+				if v != c {
+					continue
 				}
+
+				delete(s.clientConns, c.username)
+				close(c.outboundMessages)
+				log.Println("unregister done")
+				err := c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Closed"))
+				if err != nil {
+					c.conn.Close()
+				}
+				log.Printf("Unregistered client (%v)", len(s.clientConns))
 			}
 
 		case <-s.shutdown:
@@ -206,13 +213,7 @@ func (c *ClientConn) Close() {
 	}
 
 	c.server.unregister <- c
-	log.Println("unregister done")
-	err := c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Closed"))
-	if err != nil {
-		c.conn.Close()
-	}
 	c.closed = true
-
 }
 
 // Reader pump. Reads messages from the underlying WebSocket connection and forwards them to the server,
@@ -266,7 +267,6 @@ outer:
 		case msg, ok := <-c.outboundMessages:
 			c.conn.SetWriteDeadline(time.Now().Add(WRITE_WAIT_TIME))
 			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				break outer
 			}
 
