@@ -51,12 +51,17 @@ type ClientMessage struct {
 	Client *ClientConn
 }
 
+type SentMessage struct {
+	message.Message
+	done chan struct{}
+}
+
 type ClientConn struct {
 	closed           bool
 	closedMu         sync.Mutex
 	conn             *websocket.Conn
 	server           *SocketServer
-	outboundMessages chan message.Message
+	outboundMessages chan SentMessage
 
 	username string
 	lobby    string
@@ -119,7 +124,10 @@ outer:
 				}
 
 				delete(s.clientConns, c.username)
-				close(c.outboundMessages)
+				c.SendMessage(message.Message{
+					Type: websocket.CloseMessage,
+					Data: websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Closed"),
+				})
 				log.Println("unregister done")
 				err := c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Closed"))
 				if err != nil {
@@ -151,37 +159,37 @@ func (s *SocketServer) HandleMessage(m ClientMessage) {
 	switch tokens[0] {
 	case "lobbies":
 		for ln, lb := range s.lobbies {
-			m.Client.outboundMessages <- message.Message{
+			m.Client.SendMessage(message.Message{
 				Type: websocket.TextMessage,
 				Data: []byte(fmt.Sprintf("%s (%d)", ln, len(lb.clients))),
-			}
+			})
 		}
 	case "status":
-		m.Client.outboundMessages <- message.Message{
+		m.Client.SendMessage(message.Message{
 			Type: websocket.TextMessage,
 			Data: []byte("not in any lobbies"),
-		}
+		})
 	case "new":
 		s.RemoveClientFromTheirLobby(m.Client)
 		lobbyName := s.CreateLobby()
-		m.Client.outboundMessages <- message.Message{
+		m.Client.SendMessage(message.Message{
 			Type: websocket.TextMessage,
 			Data: []byte(fmt.Sprintf("Created lobby %s", lobbyName)),
-		}
+		})
 		s.AddClientToLobby(m.Client, lobbyName)
 	case "join":
 		if len(tokens) < 2 {
-			m.Client.outboundMessages <- message.Message{
+			m.Client.SendMessage(message.Message{
 				Type: websocket.TextMessage,
 				Data: []byte("Must provide lobby"),
-			}
+			})
 		}
 		lb, ok := s.lobbies[tokens[1]]
 		if !ok {
-			m.Client.outboundMessages <- message.Message{
+			m.Client.SendMessage(message.Message{
 				Type: websocket.TextMessage,
 				Data: []byte(fmt.Sprintf("Lobby %s does not exist", tokens[1])),
-			}
+			})
 		}
 		s.AddClientToLobby(m.Client, lb.name)
 
@@ -192,7 +200,7 @@ func (s *SocketServer) OpenClientConn(conn *websocket.Conn, username string) {
 	c := &ClientConn{
 		conn:             conn,
 		server:           s,
-		outboundMessages: make(chan message.Message, 256),
+		outboundMessages: make(chan SentMessage, 256),
 		username:         username,
 	}
 
@@ -281,6 +289,10 @@ outer:
 				break outer
 			}
 
+			if msg.done != nil {
+				close(msg.done)
+			}
+
 		case <-t.C:
 			c.conn.SetWriteDeadline(time.Now().Add(WRITE_WAIT_TIME))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
@@ -289,6 +301,16 @@ outer:
 		}
 	}
 	log.Println("write closed")
+}
+
+func (c *ClientConn) SendMessage(m message.Message) {
+	sm := SentMessage{
+		Message: m,
+		done:    make(chan struct{}),
+	}
+
+	c.outboundMessages <- sm
+	<-sm.done
 }
 
 // Initiates a new WebSocket connection.
@@ -380,7 +402,7 @@ func (s *SocketServer) RemoveClientFromTheirLobby(c *ClientConn) {
 		delete(s.lobbies, lb.name)
 		return
 	} else if lb.host == c.username {
-		for n, _ := range lb.clients {
+		for n := range lb.clients {
 			lb.host = n
 			break
 		}
