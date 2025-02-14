@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/Fekinox/socket-server-test/pkg/message"
 	"github.com/gorilla/websocket"
@@ -54,11 +53,6 @@ func main() {
 			})
 		case <-interrupt:
 			cl.Quit()
-
-			select {
-			case <-cl.done:
-			case <-time.After(time.Second):
-			}
 
 			return
 		case <-cl.done:

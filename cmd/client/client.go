@@ -58,6 +58,10 @@ type Client struct {
 }
 
 func (c *Client) Run() error {
+	defer func() {
+		log.Println("client loop done")
+	}()
+
 	if err := c.EnsureConnected(); err != nil {
 		return err
 	}
