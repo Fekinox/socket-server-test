@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -53,7 +54,7 @@ type ClientMessage struct {
 
 type SentMessage struct {
 	message.Message
-	done chan struct{}
+	errors chan error
 }
 
 type ClientConn struct {
@@ -122,17 +123,13 @@ outer:
 				if v != c {
 					continue
 				}
-
-				delete(s.clientConns, c.username)
 				c.SendMessage(message.Message{
 					Type: websocket.CloseMessage,
 					Data: websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Closed"),
 				})
-				log.Println("unregister done")
-				err := c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Closed"))
-				if err != nil {
-					c.conn.Close()
-				}
+
+				delete(s.clientConns, c.username)
+				close(c.outboundMessages)
 				log.Printf("Unregistered client (%v)", len(s.clientConns))
 			}
 
@@ -208,8 +205,8 @@ func (s *SocketServer) OpenClientConn(conn *websocket.Conn, username string) {
 }
 
 func (c *ClientConn) Close() {
-	log.Println("locking")
 	c.closedMu.Lock()
+	log.Println("locking")
 	defer func() {
 		log.Println("unlocking")
 		c.closedMu.Unlock()
@@ -235,6 +232,17 @@ func (c *ClientConn) ReadLoop(sv *SocketServer) {
 		return nil
 	})
 
+	c.conn.SetCloseHandler(func(code int, text string) error {
+		log.Printf("%v %q", code, text)
+
+		c.Close()
+
+		return &websocket.CloseError{
+			Code: code,
+			Text: text,
+		}
+	})
+
 	for {
 		typ, msg, err := c.conn.NextReader()
 		if err != nil {
@@ -246,7 +254,7 @@ func (c *ClientConn) ReadLoop(sv *SocketServer) {
 		data, err := io.ReadAll(msg)
 		if err != nil {
 			log.Printf("%v: %v", c, err)
-			continue
+			break
 		}
 
 		c.server.messages <- ClientMessage{
@@ -273,24 +281,35 @@ outer:
 	for {
 		select {
 		case msg, ok := <-c.outboundMessages:
-			c.conn.SetWriteDeadline(time.Now().Add(WRITE_WAIT_TIME))
-			if !ok {
-				break outer
+			err := func() error {
+				c.conn.SetWriteDeadline(time.Now().Add(WRITE_WAIT_TIME))
+				if !ok {
+					return errors.New("Could not set write deadline")
+				}
+
+				w, err := c.conn.NextWriter(msg.Type)
+				if err != nil {
+					return err
+				}
+
+				w.Write(msg.Data)
+
+				if err := w.Close(); err != nil {
+					return err
+				}
+
+				return nil
+			}()
+
+			if msg.errors != nil {
+				if err != nil {
+					msg.errors <- err
+				}
+				close(msg.errors)
 			}
 
-			w, err := c.conn.NextWriter(msg.Type)
 			if err != nil {
 				break outer
-			}
-
-			w.Write(msg.Data)
-
-			if err := w.Close(); err != nil {
-				break outer
-			}
-
-			if msg.done != nil {
-				close(msg.done)
 			}
 
 		case <-t.C:
@@ -303,14 +322,15 @@ outer:
 	log.Println("write closed")
 }
 
-func (c *ClientConn) SendMessage(m message.Message) {
+func (c *ClientConn) SendMessage(m message.Message) error {
 	sm := SentMessage{
 		Message: m,
-		done:    make(chan struct{}),
+		errors:  make(chan error),
 	}
 
 	c.outboundMessages <- sm
-	<-sm.done
+
+	return <-sm.errors
 }
 
 // Initiates a new WebSocket connection.
