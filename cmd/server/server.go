@@ -42,6 +42,8 @@ type SocketServer struct {
 	messages  chan ClientMessage
 	broadcast chan message.Message
 
+	newToken chan NewTokenRequest
+
 	TokenManager *TokenManager
 
 	lobbies map[string]Lobby
@@ -55,6 +57,11 @@ type ClientMessage struct {
 type SentMessage struct {
 	message.Message
 	errors chan error
+}
+
+type NewTokenRequest struct {
+	username   string
+	onFinished func(err error)
 }
 
 type ClientConn struct {
@@ -82,6 +89,8 @@ func NewSocketServer() *SocketServer {
 		unregister:  make(chan *ClientConn),
 		messages:    make(chan ClientMessage),
 		broadcast:   make(chan message.Message),
+
+		newToken: make(chan NewTokenRequest),
 
 		TokenManager: NewTokenManager(),
 		lobbies:      make(map[string]Lobby),
@@ -141,6 +150,13 @@ outer:
 				go c.Close()
 			}
 			log.Println("Ordered all connections to close")
+
+		case t := <-s.newToken:
+			if _, ok := s.clientConns[t.username]; ok {
+				t.onFinished(fmt.Errorf("%s is already logged in", t.username))
+				return
+			}
+			t.onFinished(nil)
 		}
 	}
 	close(s.done)
@@ -362,6 +378,7 @@ func (s *SocketServer) ServeWS(w http.ResponseWriter, r *http.Request) {
 // handshake by requesting a token from the backend and then using that token to initiate a
 // connection.
 func (s *SocketServer) CreateToken(w http.ResponseWriter, r *http.Request) {
+
 	// Parse body
 	var body struct {
 		Username string `json:"username" required:"true"`
@@ -369,6 +386,20 @@ func (s *SocketServer) CreateToken(w http.ResponseWriter, r *http.Request) {
 
 	err := json.NewDecoder(r.Body).Decode(&body)
 	if err != nil || body.Username == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	errs := make(chan error)
+
+	s.newToken <- NewTokenRequest{
+		username: body.Username,
+		onFinished: func(err error) {
+			errs <- err
+		},
+	}
+
+	if err := <-errs; err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
