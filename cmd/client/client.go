@@ -123,10 +123,12 @@ func (c *Client) Quit() {
 	}
 
 	if c.connected == Connected {
-		err := c.conn.WriteMessage(
+		err := c.conn.WriteControl(
 			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseGoingAway, ""),
+			websocket.FormatCloseMessage(websocket.CloseGoingAway, "hello"),
+			time.Now().Add(10*time.Second),
 		)
+		log.Println("sent close")
 		if err != nil {
 			log.Println("write close: ", err)
 			c.conn.Close()
@@ -135,6 +137,7 @@ func (c *Client) Quit() {
 	}
 
 	c.connected = ClientQuit
+	log.Println("finished quitting")
 }
 
 func (c *Client) ReadLoop() {

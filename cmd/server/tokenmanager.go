@@ -18,6 +18,7 @@ type TokenPayload struct {
 const (
 	TOKEN_EXPIRATION_TIME  = 5 * time.Minute
 	MAX_TOKEN_GEN_ATTEMPTS = 5
+	TOKEN_LENGTH           = 16
 )
 
 var (
@@ -54,7 +55,7 @@ func (t *TokenManager) GenerateToken(username string) (string, error) {
 		if attempts > MAX_TOKEN_GEN_ATTEMPTS {
 			return "", ErrTooManyAttempts
 		}
-		reader := io.LimitReader(rand.Reader, 64)
+		reader := io.LimitReader(rand.Reader, TOKEN_LENGTH)
 
 		var sb strings.Builder
 		b64Enc := base64.NewEncoder(base64.URLEncoding, &sb)

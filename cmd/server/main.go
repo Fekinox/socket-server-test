@@ -48,8 +48,8 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	ws.QueueShutdown()
 	fmt.Println("Shutting down...")
+	ws.Shutdown()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

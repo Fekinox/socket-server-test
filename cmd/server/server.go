@@ -2,19 +2,12 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
 	"log"
-	"math/rand"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
-
-	"github.com/Fekinox/socket-server-test/pkg/message"
 )
 
 const (
@@ -30,327 +23,89 @@ var upgrader = websocket.Upgrader{
 }
 
 type SocketServer struct {
-	clientConns map[string]*ClientConn
-
-	isShuttingDown bool
-	done           chan struct{}
-
-	shutdown   chan struct{}
-	register   chan *ClientConn
-	unregister chan *ClientConn
-
-	messages  chan ClientMessage
-	broadcast chan message.Message
-
-	newToken chan NewTokenRequest
-
 	TokenManager *TokenManager
 
-	lobbies map[string]Lobby
-}
+	shutdown    chan struct{}
+	hasShutdown chan struct{}
+	sdOnce      sync.Once
 
-type ClientMessage struct {
-	message.Message
-	Client *ClientConn
-}
+	clients map[*ClientConn]struct{}
 
-type SentMessage struct {
-	message.Message
-	errors chan error
-}
-
-type NewTokenRequest struct {
-	username   string
-	onFinished func(err error)
-}
-
-type ClientConn struct {
-	closed           bool
-	closedMu         sync.Mutex
-	conn             *websocket.Conn
-	server           *SocketServer
-	outboundMessages chan SentMessage
-
-	username string
-	lobby    string
-}
-
-type Lobby struct {
-	name    string
-	clients map[string]struct{}
-	host    string
+	register   chan *ClientConn
+	unregister chan *ClientConn
 }
 
 func NewSocketServer() *SocketServer {
 	return &SocketServer{
-		clientConns: make(map[string]*ClientConn),
-		shutdown:    make(chan struct{}),
-		register:    make(chan *ClientConn),
-		unregister:  make(chan *ClientConn),
-		messages:    make(chan ClientMessage),
-		broadcast:   make(chan message.Message),
-
-		newToken: make(chan NewTokenRequest),
-
 		TokenManager: NewTokenManager(),
-		lobbies:      make(map[string]Lobby),
-		done:         make(chan struct{}),
+		shutdown:     make(chan struct{}),
+		hasShutdown:  make(chan struct{}),
+
+		clients: map[*ClientConn]struct{}{},
+
+		register:   make(chan *ClientConn),
+		unregister: make(chan *ClientConn),
 	}
 }
 
 func (s *SocketServer) Run() {
 outer:
 	for {
-		if s.isShuttingDown && len(s.clientConns) == 0 {
-			break outer
-		} else {
-			log.Println(len(s.clientConns))
-		}
 		select {
-		case m, ok := <-s.messages:
-			if !ok {
-				break
-			}
+		case cl := <-s.register:
+			s.clients[cl] = struct{}{}
 
-			s.HandleMessage(m)
+			cl.conn.SetCloseHandler(func(code int, text string) error {
+				log.Println(code, text)
+				s.unregister <- cl
+				message := websocket.FormatCloseMessage(code, "")
 
-		case c := <-s.register:
-			if _, ok := s.clientConns[c.username]; ok {
-				log.Printf("Client %v already exists", c.username)
-				go c.Close()
-				continue outer
-			}
-			s.clientConns[c.username] = c
-			log.Printf("Registered new client (%v)", len(s.clientConns))
+				cl.conn.WriteControl(
+					websocket.CloseMessage,
+					message,
+					time.Now().Add(PING_PERIOD),
+				)
+				return nil
+			})
 
-			go c.ReadLoop(s)
-			go c.WriteLoop(s)
+			go cl.readPump()
 
-		case c := <-s.unregister:
-			log.Println("unregistering", c)
-			if v, ok := s.clientConns[c.username]; ok {
-				if v != c {
-					continue
-				}
-				c.SendMessage(message.Message{
-					Type: websocket.CloseMessage,
-					Data: websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Closed"),
-				})
+			go func() {
+				// s.unregister <- cl
 
-				delete(s.clientConns, c.username)
-				close(c.outboundMessages)
-				log.Printf("Unregistered client (%v)", len(s.clientConns))
-			}
+				// cl.conn.WriteMessage(
+				// 	websocket.CloseMessage,
+				// 	websocket.FormatCloseMessage(
+				// 		websocket.CloseTryAgainLater,
+				// 		"Try again later",
+				// 	),
+				// )
+			}()
+			log.Println("Registered new client", cl.username, len(s.clients))
+
+		case cl := <-s.unregister:
+			delete(s.clients, cl)
+			log.Println("Unregistered client ", cl.username)
 
 		case <-s.shutdown:
-			log.Println("Shutting down WebSocket server...")
-			s.isShuttingDown = true
-			for _, c := range s.clientConns {
-				log.Println("closing", c)
-				go c.Close()
-			}
-			log.Println("Ordered all connections to close")
-
-		case t := <-s.newToken:
-			if _, ok := s.clientConns[t.username]; ok {
-				t.onFinished(fmt.Errorf("%s is already logged in", t.username))
-				return
-			}
-			t.onFinished(nil)
+			break outer
 		}
 	}
-	close(s.done)
 	log.Println("main loop done")
+	close(s.hasShutdown)
 }
 
-func (s *SocketServer) QueueShutdown() {
-	s.shutdown <- struct{}{}
-}
-
-func (s *SocketServer) HandleMessage(m ClientMessage) {
-	tokens := strings.Fields(string(m.Data))
-	switch tokens[0] {
-	case "lobbies":
-		for ln, lb := range s.lobbies {
-			m.Client.SendMessage(message.Message{
-				Type: websocket.TextMessage,
-				Data: []byte(fmt.Sprintf("%s (%d)", ln, len(lb.clients))),
-			})
-		}
-	case "status":
-		m.Client.SendMessage(message.Message{
-			Type: websocket.TextMessage,
-			Data: []byte("not in any lobbies"),
-		})
-	case "new":
-		s.RemoveClientFromTheirLobby(m.Client)
-		lobbyName := s.CreateLobby()
-		m.Client.SendMessage(message.Message{
-			Type: websocket.TextMessage,
-			Data: []byte(fmt.Sprintf("Created lobby %s", lobbyName)),
-		})
-		s.AddClientToLobby(m.Client, lobbyName)
-	case "join":
-		if len(tokens) < 2 {
-			m.Client.SendMessage(message.Message{
-				Type: websocket.TextMessage,
-				Data: []byte("Must provide lobby"),
-			})
-		}
-		lb, ok := s.lobbies[tokens[1]]
-		if !ok {
-			m.Client.SendMessage(message.Message{
-				Type: websocket.TextMessage,
-				Data: []byte(fmt.Sprintf("Lobby %s does not exist", tokens[1])),
-			})
-		}
-		s.AddClientToLobby(m.Client, lb.name)
-
-	}
-}
-
-func (s *SocketServer) OpenClientConn(conn *websocket.Conn, username string) {
-	c := &ClientConn{
-		conn:             conn,
-		server:           s,
-		outboundMessages: make(chan SentMessage, 256),
-		username:         username,
-	}
-
-	s.register <- c
-}
-
-func (c *ClientConn) Close() {
-	c.closedMu.Lock()
-	log.Println("locking")
-	defer func() {
-		log.Println("unlocking")
-		c.closedMu.Unlock()
-		log.Println("close done")
-	}()
-
-	if c.closed {
-		return
-	}
-
-	c.server.unregister <- c
-	c.closed = true
-}
-
-// Reader pump. Reads messages from the underlying WebSocket connection and forwards them to the server,
-// while also recording the client who sent the message. Will halt once the underlying connection fails.
-func (c *ClientConn) ReadLoop(sv *SocketServer) {
-	defer c.Close()
-
-	c.conn.SetReadDeadline(time.Now().Add(PONG_WAIT_TIME))
-	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(PONG_WAIT_TIME))
-		return nil
+func (s *SocketServer) Shutdown() {
+	s.sdOnce.Do(func() {
+		close(s.shutdown)
+		<-s.hasShutdown
 	})
-
-	c.conn.SetCloseHandler(func(code int, text string) error {
-		log.Printf("%v %q", code, text)
-
-		c.Close()
-
-		return &websocket.CloseError{
-			Code: code,
-			Text: text,
-		}
-	})
-
-	for {
-		typ, msg, err := c.conn.NextReader()
-		if err != nil {
-			log.Printf("%v: %v", c, err)
-			c.conn.Close()
-			break
-		}
-
-		data, err := io.ReadAll(msg)
-		if err != nil {
-			log.Printf("%v: %v", c, err)
-			break
-		}
-
-		c.server.messages <- ClientMessage{
-			Message: message.Message{
-				Type: typ,
-				Data: data,
-			},
-			Client: c,
-		}
-	}
-	log.Println("read closed")
-}
-
-// Writer pump. Receives messages from the server and forwards them to the underlying WebSocket connection.
-// Will halt once the underlying connection fails, or once the server closes.
-func (c *ClientConn) WriteLoop(sv *SocketServer) {
-	t := time.NewTicker(PING_PERIOD)
-	defer func() {
-		t.Stop()
-		c.Close()
-	}()
-
-outer:
-	for {
-		select {
-		case msg, ok := <-c.outboundMessages:
-			err := func() error {
-				c.conn.SetWriteDeadline(time.Now().Add(WRITE_WAIT_TIME))
-				if !ok {
-					return errors.New("Could not set write deadline")
-				}
-
-				w, err := c.conn.NextWriter(msg.Type)
-				if err != nil {
-					return err
-				}
-
-				w.Write(msg.Data)
-
-				if err := w.Close(); err != nil {
-					return err
-				}
-
-				return nil
-			}()
-
-			if msg.errors != nil {
-				if err != nil {
-					msg.errors <- err
-				}
-				close(msg.errors)
-			}
-
-			if err != nil {
-				break outer
-			}
-
-		case <-t.C:
-			c.conn.SetWriteDeadline(time.Now().Add(WRITE_WAIT_TIME))
-			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				break outer
-			}
-		}
-	}
-	log.Println("write closed")
-}
-
-func (c *ClientConn) SendMessage(m message.Message) error {
-	sm := SentMessage{
-		Message: m,
-		errors:  make(chan error),
-	}
-
-	c.outboundMessages <- sm
-
-	return <-sm.errors
 }
 
 // Initiates a new WebSocket connection.
+//
 // Query parameters:
+//
 // * `token`: Authentication token received from the backend. If not present or invalid,
 // rejects with a 400 error.
 func (s *SocketServer) ServeWS(w http.ResponseWriter, r *http.Request) {
@@ -371,7 +126,12 @@ func (s *SocketServer) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.OpenClientConn(conn, payload.Username)
+	var _, _ = payload, conn
+
+	s.register <- &ClientConn{
+		conn:     conn,
+		username: payload.Username,
+	}
 }
 
 // Creates a token for use in initiating a WebSocket connection. Clients are expected to
@@ -390,20 +150,6 @@ func (s *SocketServer) CreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	errs := make(chan error)
-
-	s.newToken <- NewTokenRequest{
-		username: body.Username,
-		onFinished: func(err error) {
-			errs <- err
-		},
-	}
-
-	if err := <-errs; err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	token, err := s.TokenManager.GenerateToken(body.Username)
 	if err != nil {
@@ -414,60 +160,4 @@ func (s *SocketServer) CreateToken(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"token": token,
 	})
-}
-
-// TODO: Decouple the raw WebSocket communications code from the higher-level lobby management code
-func (s *SocketServer) CreateLobby() string {
-	l := Lobby{
-		clients: map[string]struct{}{},
-	}
-
-	name := ""
-	for {
-		if name != "" {
-			if _, ok := s.lobbies[name]; !ok {
-				break
-			}
-		}
-
-		var sb strings.Builder
-		for range 4 {
-			sb.WriteRune(rune(rand.Intn(26)) + 'A')
-		}
-		name = sb.String()
-	}
-
-	l.name = name
-	s.lobbies[name] = l
-
-	return name
-}
-
-func (s *SocketServer) RemoveClientFromTheirLobby(c *ClientConn) {
-	lb, ok := s.lobbies[c.lobby]
-	if !ok {
-		return
-	}
-	delete(lb.clients, c.username)
-	if len(lb.clients) == 0 {
-		delete(s.lobbies, lb.name)
-		return
-	} else if lb.host == c.username {
-		for n := range lb.clients {
-			lb.host = n
-			break
-		}
-	}
-}
-
-func (s *SocketServer) AddClientToLobby(c *ClientConn, l string) {
-	lb, ok := s.lobbies[l]
-	if !ok {
-		return
-	}
-	if len(lb.clients) == 0 {
-		lb.host = c.username
-	}
-	lb.clients[c.username] = struct{}{}
-	c.lobby = l
 }
