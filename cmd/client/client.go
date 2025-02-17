@@ -25,6 +25,11 @@ var (
 	ErrReconnectionInterrupted  = errors.New("Reconnection interrupted by OS signal")
 )
 
+var (
+	ErrBadRequest  = errors.New("Bad request")
+	ErrServerError = errors.New("Server error")
+)
+
 type ConnectionState int
 
 const (
@@ -141,6 +146,9 @@ func (c *Client) Quit() {
 }
 
 func (c *Client) ReadLoop() {
+	defer func() {
+		log.Println("read done")
+	}()
 	for {
 		if err := c.EnsureConnected(); err != nil {
 			return
@@ -172,6 +180,9 @@ func (c *Client) ReadLoop() {
 }
 
 func (c *Client) WriteLoop() {
+	defer func() {
+		log.Println("write done")
+	}()
 	for {
 		if err := c.EnsureConnected(); err != nil {
 			return
@@ -251,6 +262,12 @@ func (c *Client) EnsureConnected() error {
 			log.Println("connected")
 			c.connected = Connected
 			return nil
+		} else {
+			if errors.Is(err, ErrBadRequest) {
+				log.Println("client error")
+				c.connected = ClientQuit
+				return err
+			}
 		}
 		select {
 		case <-timeout:
@@ -279,11 +296,15 @@ func (c *Client) connect() error {
 	}
 
 	resp, err := http.Post(tokenUrl.String(), "application/json", &buf)
+	log.Println(err)
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode != http.StatusCreated {
-		return errors.New(resp.Status)
+	if resp.StatusCode >= 400 {
+		if resp.StatusCode < 500 {
+			return ErrBadRequest
+		}
+		return ErrServerError
 	}
 
 	var token struct {

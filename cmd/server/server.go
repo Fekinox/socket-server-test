@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -29,7 +30,8 @@ type SocketServer struct {
 	hasShutdown chan struct{}
 	sdOnce      sync.Once
 
-	clients map[*ClientConn]struct{}
+	clients   map[*ClientConn]struct{}
+	clientsMu sync.Mutex
 
 	register   chan *ClientConn
 	unregister chan *ClientConn
@@ -53,39 +55,48 @@ outer:
 	for {
 		select {
 		case cl := <-s.register:
-			s.clients[cl] = struct{}{}
+			func() {
+				s.clientsMu.Lock()
+				defer s.clientsMu.Unlock()
+				s.clients[cl] = struct{}{}
 
-			cl.conn.SetCloseHandler(func(code int, text string) error {
-				log.Println(code, text)
-				s.unregister <- cl
-				message := websocket.FormatCloseMessage(code, "")
+				cl.conn.SetCloseHandler(func(code int, text string) error {
+					log.Println(code, text)
+					s.unregister <- cl
+					message := websocket.FormatCloseMessage(code, "")
 
-				cl.conn.WriteControl(
-					websocket.CloseMessage,
-					message,
-					time.Now().Add(PING_PERIOD),
-				)
-				return nil
-			})
+					cl.conn.WriteControl(
+						websocket.CloseMessage,
+						message,
+						time.Now().Add(PING_PERIOD),
+					)
+					return nil
+				})
 
-			go cl.readPump()
+				go cl.readPump()
 
-			go func() {
-				// s.unregister <- cl
+				go func() {
+					// s.unregister <- cl
 
-				// cl.conn.WriteMessage(
-				// 	websocket.CloseMessage,
-				// 	websocket.FormatCloseMessage(
-				// 		websocket.CloseTryAgainLater,
-				// 		"Try again later",
-				// 	),
-				// )
+					// cl.conn.WriteMessage(
+					// 	websocket.CloseMessage,
+					// 	websocket.FormatCloseMessage(
+					// 		websocket.CloseTryAgainLater,
+					// 		"Try again later",
+					// 	),
+					// )
+				}()
+				log.Println("Registered new client", cl.username, len(s.clients))
 			}()
-			log.Println("Registered new client", cl.username, len(s.clients))
 
 		case cl := <-s.unregister:
-			delete(s.clients, cl)
-			log.Println("Unregistered client ", cl.username)
+			func() {
+				s.clientsMu.Lock()
+				defer s.clientsMu.Unlock()
+
+				delete(s.clients, cl)
+				log.Println("Unregistered client ", cl.username)
+			}()
 
 		case <-s.shutdown:
 			break outer
@@ -138,7 +149,6 @@ func (s *SocketServer) ServeWS(w http.ResponseWriter, r *http.Request) {
 // handshake by requesting a token from the backend and then using that token to initiate a
 // connection.
 func (s *SocketServer) CreateToken(w http.ResponseWriter, r *http.Request) {
-
 	// Parse body
 	var body struct {
 		Username string `json:"username" required:"true"`
@@ -150,12 +160,30 @@ func (s *SocketServer) CreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	err = func() error {
+		s.clientsMu.Lock()
+		defer s.clientsMu.Unlock()
+
+		for cl, _ := range s.clients {
+			if cl.username == body.Username {
+				return fmt.Errorf("user %s already exists", body.Username)
+			}
+		}
+		return nil
+	}()
+
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	token, err := s.TokenManager.GenerateToken(body.Username)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]any{
 		"token": token,
