@@ -61,31 +61,15 @@ outer:
 				s.clients[cl] = struct{}{}
 
 				cl.conn.SetCloseHandler(func(code int, text string) error {
-					log.Println(code, text)
+					log.Println("close handler", code, text)
 					s.unregister <- cl
-					message := websocket.FormatCloseMessage(code, "")
 
-					cl.conn.WriteControl(
-						websocket.CloseMessage,
-						message,
-						time.Now().Add(PING_PERIOD),
-					)
+					closeConn(cl.conn, code, "")
 					return nil
 				})
 
 				go cl.readPump()
 
-				go func() {
-					// s.unregister <- cl
-
-					// cl.conn.WriteMessage(
-					// 	websocket.CloseMessage,
-					// 	websocket.FormatCloseMessage(
-					// 		websocket.CloseTryAgainLater,
-					// 		"Try again later",
-					// 	),
-					// )
-				}()
 				log.Println("Registered new client", cl.username, len(s.clients))
 			}()
 
@@ -99,6 +83,10 @@ outer:
 			}()
 
 		case <-s.shutdown:
+			for cl := range s.clients {
+				closeConn(cl.conn, websocket.CloseNormalClosure, "goodbye")
+				log.Println("closed", cl.username)
+			}
 			break outer
 		}
 	}
@@ -188,4 +176,17 @@ func (s *SocketServer) CreateToken(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"token": token,
 	})
+}
+
+func closeConn(conn *websocket.Conn, code int, text string) (err error) {
+	message := websocket.FormatCloseMessage(code, text)
+	err = conn.WriteControl(
+		websocket.CloseMessage,
+		message,
+		time.Now().Add(PING_PERIOD),
+	)
+	if err != nil {
+		conn.Close()
+	}
+	return
 }
