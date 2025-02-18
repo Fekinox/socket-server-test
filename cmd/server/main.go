@@ -7,16 +7,18 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+
 	// "runtime"
 	"syscall"
 	"time"
 
+	"github.com/Fekinox/socket-server-test/pkg/server"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
 
 func main() {
-	ws := NewSocketServer()
+	ws := server.NewSocketServer()
 	go ws.Run()
 
 	r := chi.NewRouter()

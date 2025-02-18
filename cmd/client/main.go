@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/Fekinox/socket-server-test/pkg/client"
 	"github.com/Fekinox/socket-server-test/pkg/message"
 	"github.com/gorilla/websocket"
 )
@@ -18,15 +19,7 @@ func main() {
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt, os.Kill, syscall.SIGTERM, syscall.SIGINT)
 
-	cl := Client{
-		Host:     "localhost:3000",
-		Username: *username,
-
-		inboundMessages:  make(chan message.Message, 256),
-		outboundMessages: make(chan message.Message, 256),
-		errors:           make(chan error, 256),
-		done:             make(chan struct{}),
-	}
+	cl := client.NewClient("localhost:3000", *username)
 
 	go cl.Run()
 	defer cl.Quit()
@@ -55,7 +48,7 @@ func main() {
 			cl.Quit()
 
 			return
-		case <-cl.done:
+		case <-cl.Done():
 			return
 		}
 	}

@@ -1,4 +1,4 @@
-package main
+package client
 
 import (
 	"bytes"
@@ -46,6 +46,18 @@ const (
 	ServerDead
 	ClientQuit
 )
+
+func NewClient(host, username string) *Client {
+	return &Client{
+		Host:     host,
+		Username: username,
+
+		inboundMessages:  make(chan message.Message, 256),
+		outboundMessages: make(chan message.Message, 256),
+		errors:           make(chan error, 256),
+		done:             make(chan struct{}),
+	}
+}
 
 type Client struct {
 	Host     string
@@ -342,4 +354,8 @@ func (c *Client) ReadMessage() (message.Message, error) {
 
 func (c *Client) WriteMessage(m message.Message) {
 	c.outboundMessages <- m
+}
+
+func (c *Client) Done() <-chan struct{} {
+	return c.done
 }
