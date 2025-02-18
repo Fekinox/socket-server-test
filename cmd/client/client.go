@@ -158,6 +158,7 @@ func (c *Client) ReadLoop() {
 			log.Println("attempting read")
 			typ, msg, err := c.conn.ReadMessage()
 			if err != nil {
+				log.Println(err)
 				func() {
 					c.connectedMu.Lock()
 					defer c.connectedMu.Unlock()

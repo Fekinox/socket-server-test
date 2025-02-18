@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Fekinox/socket-server-test/pkg/message"
 	"github.com/gorilla/websocket"
 )
 
@@ -21,6 +22,11 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin:     func(r *http.Request) bool { return true },
+}
+
+type AcknowledgedMessage struct {
+	message.Message
+	ack chan error
 }
 
 type SocketServer struct {
@@ -84,8 +90,9 @@ outer:
 
 		case <-s.shutdown:
 			for cl := range s.clients {
+				log.Println("closing", cl.username)
 				closeConn(cl.conn, websocket.CloseNormalClosure, "goodbye")
-				log.Println("closed", cl.username)
+				log.Println("close done")
 			}
 			break outer
 		}
@@ -130,6 +137,8 @@ func (s *SocketServer) ServeWS(w http.ResponseWriter, r *http.Request) {
 	s.register <- &ClientConn{
 		conn:     conn,
 		username: payload.Username,
+
+		control: make(chan *AcknowledgedMessage),
 	}
 }
 
