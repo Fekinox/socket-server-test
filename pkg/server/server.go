@@ -70,7 +70,8 @@ outer:
 					log.Println("close handler", code, text)
 					s.unregister <- cl
 
-					closeConn(cl.conn, code, "")
+					cl.WriteCloseMessage(code, "received close message, goodbye")
+
 					return nil
 				})
 
@@ -92,11 +93,7 @@ outer:
 		case <-s.shutdown:
 			for cl := range s.clients {
 				log.Println("closing", cl.username)
-				message := websocket.FormatCloseMessage(
-					websocket.CloseNormalClosure,
-					"goodbye",
-				)
-				cl.WriteControl(websocket.CloseMessage, message)
+				cl.WriteCloseMessage(websocket.CloseNormalClosure, "goodbye")
 				log.Println("close done")
 			}
 			break outer
@@ -143,7 +140,7 @@ func (s *SocketServer) ServeWS(w http.ResponseWriter, r *http.Request) {
 		conn:     conn,
 		username: payload.Username,
 
-		control: make(chan *AcknowledgedMessage),
+		messages: make(chan *AcknowledgedMessage),
 	}
 }
 
@@ -166,7 +163,7 @@ func (s *SocketServer) CreateToken(w http.ResponseWriter, r *http.Request) {
 		s.clientsMu.Lock()
 		defer s.clientsMu.Unlock()
 
-		for cl, _ := range s.clients {
+		for cl := range s.clients {
 			if cl.username == body.Username {
 				return fmt.Errorf("user %s already exists", body.Username)
 			}
@@ -190,17 +187,4 @@ func (s *SocketServer) CreateToken(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"token": token,
 	})
-}
-
-func closeConn(conn *websocket.Conn, code int, text string) (err error) {
-	message := websocket.FormatCloseMessage(code, text)
-	err = conn.WriteControl(
-		websocket.CloseMessage,
-		message,
-		time.Now().Add(PING_PERIOD),
-	)
-	if err != nil {
-		conn.Close()
-	}
-	return
 }

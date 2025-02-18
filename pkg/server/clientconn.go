@@ -12,7 +12,7 @@ type ClientConn struct {
 	conn     *websocket.Conn
 	username string
 
-	control chan *AcknowledgedMessage
+	messages chan *AcknowledgedMessage
 }
 
 func (c *ClientConn) readPump() {
@@ -41,7 +41,7 @@ func (c *ClientConn) writePump() {
 
 	for {
 		select {
-		case ct := <-c.control:
+		case ct := <-c.messages:
 			err := c.conn.WriteControl(
 				ct.Type,
 				ct.Data,
@@ -65,7 +65,19 @@ func (c *ClientConn) writePump() {
 	}
 }
 
-func (c *ClientConn) WriteControl(typ int, data []byte) error {
+func (c *ClientConn) WriteTextMessage(data string) error {
+	return c.WriteMessage(websocket.TextMessage, []byte(data))
+}
+
+func (c *ClientConn) WriteBinaryMessage(data []byte) error {
+	return c.WriteMessage(websocket.BinaryMessage, []byte(data))
+}
+
+func (c *ClientConn) WriteCloseMessage(code int, text string) error {
+	return c.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(code, text))
+}
+
+func (c *ClientConn) WriteMessage(typ int, data []byte) error {
 	msg := AcknowledgedMessage{
 		Message: message.Message{
 			Type: typ,
@@ -74,6 +86,6 @@ func (c *ClientConn) WriteControl(typ int, data []byte) error {
 		ack: make(chan error),
 	}
 
-	c.control <- &msg
+	c.messages <- &msg
 	return <-msg.ack
 }
