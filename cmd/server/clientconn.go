@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"time"
 
 	"github.com/Fekinox/socket-server-test/pkg/message"
@@ -17,6 +18,13 @@ type ClientConn struct {
 func (c *ClientConn) readPump() {
 	defer c.conn.Close()
 
+	c.conn.SetReadDeadline(time.Now().Add(PONG_WAIT_TIME))
+	c.conn.SetPongHandler(func(appData string) error {
+		log.Println("pong")
+		c.conn.SetReadDeadline(time.Now().Add(PONG_WAIT_TIME))
+		return nil
+	})
+
 	for {
 		if _, _, err := c.conn.NextReader(); err != nil {
 			break
@@ -25,7 +33,11 @@ func (c *ClientConn) readPump() {
 }
 
 func (c *ClientConn) writePump() {
-	defer c.conn.Close()
+	ticker := time.NewTicker(PING_PERIOD)
+	defer func() {
+		ticker.Stop()
+		c.conn.Close()
+	}()
 
 	for {
 		select {
@@ -42,6 +54,13 @@ func (c *ClientConn) writePump() {
 				ct.ack <- err
 				close(ct.ack)
 			}
+
+		case <-ticker.C:
+			c.conn.SetWriteDeadline(time.Now().Add(WRITE_WAIT_TIME))
+			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+			log.Println("ping")
 		}
 	}
 }

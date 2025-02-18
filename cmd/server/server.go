@@ -14,7 +14,7 @@ import (
 
 const (
 	WRITE_WAIT_TIME = 10 * time.Second
-	PONG_WAIT_TIME  = 60 * time.Second
+	PONG_WAIT_TIME  = 5 * time.Second
 	PING_PERIOD     = (PONG_WAIT_TIME * 9) / 10
 )
 
@@ -75,6 +75,7 @@ outer:
 				})
 
 				go cl.readPump()
+				go cl.writePump()
 
 				log.Println("Registered new client", cl.username, len(s.clients))
 			}()
@@ -91,7 +92,11 @@ outer:
 		case <-s.shutdown:
 			for cl := range s.clients {
 				log.Println("closing", cl.username)
-				closeConn(cl.conn, websocket.CloseNormalClosure, "goodbye")
+				message := websocket.FormatCloseMessage(
+					websocket.CloseNormalClosure,
+					"goodbye",
+				)
+				cl.WriteControl(websocket.CloseMessage, message)
 				log.Println("close done")
 			}
 			break outer
