@@ -61,45 +61,13 @@ outer:
 	for {
 		select {
 		case cl := <-s.register:
-			func() {
-				s.clientsMu.Lock()
-				defer s.clientsMu.Unlock()
-				s.clients[cl] = struct{}{}
-
-				cl.conn.SetCloseHandler(func(code int, text string) error {
-					log.Println("close handler", code, text)
-					s.unregister <- cl
-
-					cl.WriteCloseMessage(code, "received close message, goodbye")
-
-					return nil
-				})
-
-				go cl.readPump()
-				go cl.writePump()
-
-				log.Println("Registered new client", cl.username, len(s.clients))
-
-				if err := cl.WriteTextMessage("hello"); err != nil {
-					log.Println(err)
-				}
-			}()
+			s.RegisterClient(cl)
 
 		case cl := <-s.unregister:
-			func() {
-				s.clientsMu.Lock()
-				defer s.clientsMu.Unlock()
-
-				delete(s.clients, cl)
-				log.Println("Unregistered client ", cl.username)
-			}()
+			s.UnregisterClient(cl)
 
 		case <-s.shutdown:
-			for cl := range s.clients {
-				log.Println("closing", cl.username)
-				cl.WriteCloseMessage(websocket.CloseNormalClosure, "goodbye")
-				log.Println("close done")
-			}
+			s.DoShutdown()
 			break outer
 		}
 	}
@@ -112,6 +80,54 @@ func (s *SocketServer) Shutdown() {
 		close(s.shutdown)
 		<-s.hasShutdown
 	})
+}
+
+func (s *SocketServer) RegisterClient(cl *ClientConn) {
+	s.clientsMu.Lock()
+	defer s.clientsMu.Unlock()
+	s.clients[cl] = struct{}{}
+
+	cl.conn.SetCloseHandler(func(code int, text string) error {
+		log.Println("close handler", code, text)
+		s.unregister <- cl
+
+		cl.WriteCloseMessage(code, "received close message, goodbye")
+
+		return nil
+	})
+
+	go cl.readPump()
+	go cl.writePump()
+
+	cl.On("ping", func(username, body string) {
+		cl.WriteTextMessage(body)
+		cl.WriteTextMessage("pong")
+	})
+
+	log.Println("Registered new client", cl.Username, len(s.clients))
+
+	if err := cl.WriteTextMessage("hello"); err != nil {
+		log.Println(err)
+	}
+}
+
+func (s *SocketServer) UnregisterClient(cl *ClientConn) {
+	s.clientsMu.Lock()
+	defer s.clientsMu.Unlock()
+
+	delete(s.clients, cl)
+	log.Println("Unregistered client ", cl.Username)
+}
+
+func (s *SocketServer) DoShutdown() {
+	s.clientsMu.Lock()
+	defer s.clientsMu.Unlock()
+
+	for cl := range s.clients {
+		log.Println("closing", cl.Username)
+		cl.WriteCloseMessage(websocket.CloseNormalClosure, "goodbye")
+		log.Println("close done")
+	}
 }
 
 // Initiates a new WebSocket connection.
@@ -142,9 +158,11 @@ func (s *SocketServer) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 	s.register <- &ClientConn{
 		conn:     conn,
-		username: payload.Username,
+		Username: payload.Username,
 
 		messages: make(chan *AcknowledgedMessage),
+
+		handlers: make(map[string]HandlerFunc),
 	}
 }
 
@@ -168,7 +186,7 @@ func (s *SocketServer) CreateToken(w http.ResponseWriter, r *http.Request) {
 		defer s.clientsMu.Unlock()
 
 		for cl := range s.clients {
-			if cl.username == body.Username {
+			if cl.Username == body.Username {
 				return fmt.Errorf("user %s already exists", body.Username)
 			}
 		}
