@@ -168,7 +168,6 @@ func (c *Client) ReadLoop() {
 		}
 
 		for {
-			log.Println("attempting read")
 			typ, msg, err := c.conn.ReadMessage()
 			if err != nil {
 				log.Println(err)
