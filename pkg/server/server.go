@@ -14,7 +14,7 @@ import (
 
 const (
 	WRITE_WAIT_TIME = 10 * time.Second
-	PONG_WAIT_TIME  = 5 * time.Second
+	PONG_WAIT_TIME  = 60 * time.Second
 	PING_PERIOD     = (PONG_WAIT_TIME * 9) / 10
 )
 
