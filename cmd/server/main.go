@@ -19,6 +19,17 @@ import (
 
 func main() {
 	ws := server.NewSocketServer()
+
+	ws.SetConnectHandler(func(cl *server.ClientConn) {
+		cl.On("ping", func(username, body string) {
+			cl.WriteTextMessage(fmt.Sprintf("pong: %q", body))
+		})
+
+		if err := cl.WriteTextMessage("hello"); err != nil {
+			log.Println(err)
+		}
+	})
+
 	go ws.Run()
 
 	r := chi.NewRouter()

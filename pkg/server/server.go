@@ -41,10 +41,12 @@ type SocketServer struct {
 
 	register   chan *ClientConn
 	unregister chan *ClientConn
+
+	handleConnect func(cl *ClientConn)
 }
 
 func NewSocketServer() *SocketServer {
-	return &SocketServer{
+	s := &SocketServer{
 		TokenManager: NewTokenManager(),
 		shutdown:     make(chan struct{}),
 		hasShutdown:  make(chan struct{}),
@@ -54,6 +56,10 @@ func NewSocketServer() *SocketServer {
 		register:   make(chan *ClientConn),
 		unregister: make(chan *ClientConn),
 	}
+
+	s.SetConnectHandler(nil)
+
+	return s
 }
 
 func (s *SocketServer) Run() {
@@ -99,16 +105,9 @@ func (s *SocketServer) RegisterClient(cl *ClientConn) {
 	go cl.readPump()
 	go cl.writePump()
 
-	cl.On("ping", func(username, body string) {
-		cl.WriteTextMessage(body)
-		cl.WriteTextMessage("pong")
-	})
+	s.handleConnect(cl)
 
 	log.Println("Registered new client", cl.Username, len(s.clients))
-
-	if err := cl.WriteTextMessage("hello"); err != nil {
-		log.Println(err)
-	}
 }
 
 func (s *SocketServer) UnregisterClient(cl *ClientConn) {
@@ -209,4 +208,11 @@ func (s *SocketServer) CreateToken(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"token": token,
 	})
+}
+
+func (s *SocketServer) SetConnectHandler(h func(cl *ClientConn)) {
+	if h == nil {
+		h = func(*ClientConn) {}
+	}
+	s.handleConnect = h
 }
