@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	WRITE_WAIT_TIME = 10 * time.Second
+	WRITE_WAIT_TIME = 2 * time.Second
 	PONG_WAIT_TIME  = 60 * time.Second
 	PING_PERIOD     = (PONG_WAIT_TIME * 9) / 10
 )
@@ -79,6 +79,10 @@ outer:
 				go cl.writePump()
 
 				log.Println("Registered new client", cl.username, len(s.clients))
+
+				if err := cl.WriteTextMessage("hello"); err != nil {
+					log.Println(err)
+				}
 			}()
 
 		case cl := <-s.unregister:

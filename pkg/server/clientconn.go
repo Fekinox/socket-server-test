@@ -42,22 +42,31 @@ func (c *ClientConn) writePump() {
 	for {
 		select {
 		case ct := <-c.messages:
-			err := c.conn.WriteControl(
-				ct.Type,
-				ct.Data,
-				time.Now().Add(PING_PERIOD),
-			)
-			if err != nil {
-				return
-			}
+			c.conn.SetWriteDeadline(time.Now().Add(WRITE_WAIT_TIME))
+			err := func() error {
+				if ct.Type == websocket.TextMessage || ct.Type == websocket.BinaryMessage {
+					c.conn.SetWriteDeadline(time.Now().Add(WRITE_WAIT_TIME))
+					return c.conn.WriteMessage(ct.Type, ct.Data)
+				} else {
+					return c.conn.WriteControl(
+						ct.Type,
+						ct.Data,
+						time.Now().Add(PING_PERIOD),
+					)
+				}
+			}()
 			if ct.ack != nil {
 				ct.ack <- err
 				close(ct.ack)
 			}
 
 		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(WRITE_WAIT_TIME))
-			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			err := c.conn.WriteControl(
+				websocket.PingMessage,
+				nil,
+				time.Now().Add(WRITE_WAIT_TIME),
+			)
+			if err != nil {
 				return
 			}
 			log.Println("ping")
