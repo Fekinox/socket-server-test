@@ -348,7 +348,6 @@ func (s *SocketServer) Broadcast(typ int, data []byte, users ...string) {
 		if !ok {
 			continue
 		}
-		log.Println(u)
 		if cl.IsClosed() {
 			continue
 		}

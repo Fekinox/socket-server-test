@@ -2,6 +2,8 @@ package server
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/Fekinox/socket-server-test/pkg/grid"
 )
@@ -38,6 +40,13 @@ type TicTacToeState struct {
 	Status       TTTStatus
 	WinningMove  grid.Pos
 	WinningTiles []grid.Pos
+}
+
+func InitialTicTacToeState() *TicTacToeState {
+	return &TicTacToeState{
+		Grid: grid.NewGrid(int(TTT_INIT_WIDTH), int(TTT_INIT_HEIGHT), 0),
+		Turn: 1,
+	}
 }
 
 func findKInARowAt(g TicTacToeGrid, x, y, dx, dy, k int) ([]grid.Pos, bool) {
@@ -84,18 +93,19 @@ func allKInARowsAt(g TicTacToeGrid, x, y, k int) [][]grid.Pos {
 }
 
 func expand(g TicTacToeGrid, dir ExpandDirection) TicTacToeGrid {
-	var nw, nh, ox, oy int
+	var ox, oy int
+	nw, nh := g.Width(), g.Height()
 	switch dir {
 	case ExpandUp:
 		nh = nh + 1
+		oy = 1
 	case ExpandDown:
 		nh = nh + 1
-		oy = 1
 	case ExpandLeft:
 		nw = nw + 1
+		ox = 1
 	case ExpandRight:
 		nw = nw + 1
-		ox = 1
 	}
 
 	return grid.NewGridWith(nw, nh, func(x, y int) int {
@@ -117,7 +127,7 @@ func NextMove(ts *TicTacToeState, move Move) (*TicTacToeState, error) {
 	case Mark:
 		v, ok := ts.Grid.Get(m.X, m.Y)
 		if !ok {
-			return nil, errors.New("Position is out of bounds")
+			return nil, fmt.Errorf("Position %d %d is out of bounds", m.X, m.Y)
 		}
 		if v != 0 {
 			return nil, errors.New("Grid cell is occupied")
@@ -158,4 +168,25 @@ func NextMove(ts *TicTacToeState, move Move) (*TicTacToeState, error) {
 	}
 
 	return nextState, nil
+}
+
+func (g *TicTacToeState) GameStateToStrings() []string {
+	var res []string
+	for y := range g.Grid.Height() {
+		var cur strings.Builder
+		for x := range g.Grid.Width() {
+			v := g.Grid.MustGet(x, y)
+			switch v {
+			case 0:
+				cur.WriteByte('.')
+			case 1:
+				cur.WriteByte('X')
+			case 2:
+				cur.WriteByte('O')
+			}
+		}
+		res = append(res, cur.String())
+	}
+
+	return res
 }

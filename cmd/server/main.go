@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 
 	// "runtime"
 	"syscall"
@@ -45,6 +47,54 @@ func main() {
 
 		cl.On("info", func(username, body string) {
 			gm.LobbyInfo(ws, username)
+		})
+
+		cl.On("start", func(username, body string) {
+			gm.StartGame(ws, username)
+		})
+
+		cl.On("mark", func(username, body string) {
+			tokens := strings.Fields(body)
+			if len(tokens) < 2 {
+				cl.WriteTextMessage("Must provide at least two arguments")
+				return
+			}
+
+			x, err := strconv.Atoi(tokens[0])
+			if err != nil {
+				cl.WriteTextMessage("First argument must be an integer")
+				return
+			}
+			y, err := strconv.Atoi(tokens[1])
+			if err != nil {
+				cl.WriteTextMessage("Second argument must be an integer")
+				return
+			}
+
+			gm.Move(ws, username, server.Mark{X: x, Y: y})
+		})
+
+		cl.On("expand", func(username, body string) {
+			var exp server.ExpandDirection
+			switch body {
+			case "up":
+				exp = server.ExpandUp
+			case "down":
+				exp = server.ExpandDown
+			case "left":
+				exp = server.ExpandLeft
+			case "right":
+				exp = server.ExpandRight
+			default:
+				cl.WriteTextMessage("Argument to expand must be 'up', 'down', 'left', or 'right'")
+				return
+			}
+
+			gm.Move(ws, username, server.Expand(exp))
+		})
+
+		cl.On("gamestate", func(username, body string) {
+			gm.GetCurrentGameState(ws, username)
 		})
 	})
 

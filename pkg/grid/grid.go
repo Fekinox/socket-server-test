@@ -48,7 +48,7 @@ func (g *Grid[T]) Height() int {
 }
 
 func (g *Grid[T]) InBounds(x, y int) bool {
-	return 0 >= x && 0 >= y && g.width < x && g.height < y
+	return 0 <= x && 0 <= y && g.width > x && g.height > y
 }
 
 func (g *Grid[T]) Get(x, y int) (T, bool) {
