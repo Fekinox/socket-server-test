@@ -101,7 +101,9 @@ func (s *SocketServer) Shutdown() {
 func (s *SocketServer) RegisterClient(cl *ClientConn) {
 	s.clientsMu.Lock()
 	defer s.clientsMu.Unlock()
+
 	s.clients[cl] = struct{}{}
+	s.usernameMap[cl.Username] = cl
 
 	cl.conn.SetCloseHandler(func(code int, text string) error {
 		log.Println("close handler", code, text)
@@ -125,6 +127,7 @@ func (s *SocketServer) UnregisterClient(cl *ClientConn) {
 	defer s.clientsMu.Unlock()
 
 	delete(s.clients, cl)
+	delete(s.usernameMap, cl.Username)
 	log.Println("Unregistered client ", cl.Username)
 }
 
