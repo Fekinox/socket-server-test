@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"net/http"
 	"sync"
 	"time"
@@ -29,6 +30,11 @@ type AcknowledgedMessage struct {
 	ack chan error
 }
 
+type ClientTag struct {
+	username string
+	tag      string
+}
+
 type SocketServer struct {
 	TokenManager *TokenManager
 
@@ -36,8 +42,10 @@ type SocketServer struct {
 	hasShutdown chan struct{}
 	sdOnce      sync.Once
 
-	clients   map[*ClientConn]struct{}
-	clientsMu sync.Mutex
+	clients     map[*ClientConn]struct{}
+	clientsMu   sync.Mutex
+	usernameMap map[string]*ClientConn
+	clientTags  map[ClientTag]struct{}
 
 	register   chan *ClientConn
 	unregister chan *ClientConn
@@ -51,7 +59,9 @@ func NewSocketServer() *SocketServer {
 		shutdown:     make(chan struct{}),
 		hasShutdown:  make(chan struct{}),
 
-		clients: map[*ClientConn]struct{}{},
+		clients:     map[*ClientConn]struct{}{},
+		usernameMap: make(map[string]*ClientConn),
+		clientTags:  make(map[ClientTag]struct{}),
 
 		register:   make(chan *ClientConn),
 		unregister: make(chan *ClientConn),
@@ -215,4 +225,104 @@ func (s *SocketServer) SetConnectHandler(h func(cl *ClientConn)) {
 		h = func(*ClientConn) {}
 	}
 	s.handleConnect = h
+}
+
+func (s *SocketServer) GetClientByUsername(username string) (*ClientConn, bool) {
+	s.clientsMu.Lock()
+	defer s.clientsMu.Unlock()
+
+	cl, ok := s.usernameMap[username]
+	if !ok {
+		return nil, false
+	}
+	if _, ok := s.clients[cl]; !ok {
+		return nil, false
+	}
+
+	return cl, ok
+}
+
+func (s *SocketServer) Usernames(tags ...string) []string {
+	s.clientsMu.Lock()
+	defer s.clientsMu.Unlock()
+
+	var names []string
+	for u, cl := range s.usernameMap {
+		if _, ok := s.clients[cl]; !ok {
+			continue
+		}
+
+		if len(tags) != 0 {
+			var found bool
+			for _, t := range tags {
+				_, ok := s.clientTags[ClientTag{
+					username: u,
+					tag:      t,
+				}]
+				if ok {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+		names = append(names, u)
+	}
+
+	return names
+}
+
+func (s *SocketServer) AddClientToTag(u, t string) {
+	s.clientsMu.Lock()
+	defer s.clientsMu.Unlock()
+
+	ct := ClientTag{
+		username: u,
+		tag:      t,
+	}
+	s.clientTags[ct] = struct{}{}
+}
+
+func (s *SocketServer) RemoveAllTagsFromClient(u string) {
+	s.clientsMu.Lock()
+	defer s.clientsMu.Unlock()
+
+	maps.DeleteFunc(s.clientTags, func(ct ClientTag, _ struct{}) bool {
+		return ct.username == u
+	})
+}
+
+func (s *SocketServer) RemoveClientFromTag(u, t string) {
+	s.clientsMu.Lock()
+	defer s.clientsMu.Unlock()
+
+	delete(s.clientTags, ClientTag{
+		username: u,
+		tag:      t,
+	})
+}
+
+func (s *SocketServer) ClientHasTag(u, t string) bool {
+	s.clientsMu.Lock()
+	defer s.clientsMu.Unlock()
+
+	_, ok := s.clientTags[ClientTag{
+		username: u,
+		tag:      t,
+	}]
+
+	return ok
+}
+
+func (s *SocketServer) GetClientTags(u string) []string {
+	var tags []string
+	for ct := range s.clientTags {
+		if ct.username == u {
+			tags = append(tags, ct.tag)
+		}
+	}
+
+	return tags
 }
