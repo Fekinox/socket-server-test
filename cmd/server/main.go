@@ -18,6 +18,8 @@ import (
 )
 
 func main() {
+	gm := server.NewGameManager()
+
 	ws := server.NewSocketServer()
 
 	ws.SetConnectHandler(func(cl *server.ClientConn) {
@@ -25,9 +27,29 @@ func main() {
 			cl.WriteTextMessage(fmt.Sprintf("pong: %q", body))
 		})
 
-		if err := cl.WriteTextMessage("hello"); err != nil {
-			log.Println(err)
-		}
+		cl.On("new", func(username, body string) {
+			gm.NewLobby(ws, cl.Username)
+		})
+
+		cl.On("join", func(username, body string) {
+			gm.JoinLobby(ws, cl.Username, body)
+		})
+
+		cl.On("leave", func(username, body string) {
+			gm.RemoveFromLobby(ws, cl.Username)
+		})
+
+		cl.On("say", func(username, body string) {
+			gm.SayInLobby(ws, username, body)
+		})
+
+		cl.On("info", func(username, body string) {
+			gm.LobbyInfo(ws, username)
+		})
+	})
+
+	ws.SetDisconnectHandler(func(cl *server.ClientConn) {
+		gm.RemoveFromLobby(ws, cl.Username)
 	})
 
 	go ws.Run()

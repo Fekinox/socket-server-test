@@ -50,7 +50,8 @@ type SocketServer struct {
 	register   chan *ClientConn
 	unregister chan *ClientConn
 
-	handleConnect func(cl *ClientConn)
+	handleConnect    func(cl *ClientConn)
+	handleDisconnect func(cl *ClientConn)
 }
 
 func NewSocketServer() *SocketServer {
@@ -68,6 +69,7 @@ func NewSocketServer() *SocketServer {
 	}
 
 	s.SetConnectHandler(nil)
+	s.SetDisconnectHandler(nil)
 
 	return s
 }
@@ -78,9 +80,11 @@ outer:
 		select {
 		case cl := <-s.register:
 			s.RegisterClient(cl)
+			s.handleConnect(cl)
 
 		case cl := <-s.unregister:
 			s.UnregisterClient(cl)
+			s.handleDisconnect(cl)
 
 		case <-s.shutdown:
 			s.DoShutdown()
@@ -107,17 +111,16 @@ func (s *SocketServer) RegisterClient(cl *ClientConn) {
 
 	cl.conn.SetCloseHandler(func(code int, text string) error {
 		log.Println("close handler", code, text)
+		if err := cl.WriteCloseMessage(code, "received close message, goodbye"); err != nil {
+			cl.conn.Close()
+		}
 		s.unregister <- cl
-
-		cl.WriteCloseMessage(code, "received close message, goodbye")
 
 		return nil
 	})
 
 	go cl.readPump()
 	go cl.writePump()
-
-	s.handleConnect(cl)
 
 	log.Println("Registered new client", cl.Username, len(s.clients))
 }
@@ -128,6 +131,8 @@ func (s *SocketServer) UnregisterClient(cl *ClientConn) {
 
 	delete(s.clients, cl)
 	delete(s.usernameMap, cl.Username)
+	close(cl.messages)
+
 	log.Println("Unregistered client ", cl.Username)
 }
 
@@ -230,6 +235,13 @@ func (s *SocketServer) SetConnectHandler(h func(cl *ClientConn)) {
 	s.handleConnect = h
 }
 
+func (s *SocketServer) SetDisconnectHandler(h func(cl *ClientConn)) {
+	if h == nil {
+		h = func(*ClientConn) {}
+	}
+	s.handleDisconnect = h
+}
+
 func (s *SocketServer) GetClientByUsername(username string) (*ClientConn, bool) {
 	s.clientsMu.Lock()
 	defer s.clientsMu.Unlock()
@@ -328,4 +340,22 @@ func (s *SocketServer) GetClientTags(u string) []string {
 	}
 
 	return tags
+}
+
+func (s *SocketServer) Broadcast(typ int, data []byte, users ...string) {
+	for _, u := range users {
+		cl, ok := s.GetClientByUsername(u)
+		if !ok {
+			continue
+		}
+		log.Println(u)
+		if cl.IsClosed() {
+			continue
+		}
+		cl.WriteMessage(typ, data)
+	}
+}
+
+func (s *SocketServer) BroadcastText(data string, users ...string) {
+	s.Broadcast(websocket.TextMessage, []byte(data), users...)
 }

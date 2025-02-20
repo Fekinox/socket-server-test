@@ -3,6 +3,7 @@ package server
 import (
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Fekinox/socket-server-test/pkg/message"
@@ -18,6 +19,9 @@ type ClientConn struct {
 	messages chan *AcknowledgedMessage
 
 	handlers map[string]HandlerFunc
+
+	closed   bool
+	closedMu sync.Mutex
 }
 
 func (c *ClientConn) readPump() {
@@ -57,7 +61,10 @@ func (c *ClientConn) writePump() {
 
 	for {
 		select {
-		case m := <-c.messages:
+		case m, ok := <-c.messages:
+			if !ok {
+				continue
+			}
 			c.conn.SetWriteDeadline(time.Now().Add(WRITE_WAIT_TIME))
 			err := func() error {
 				if m.Type == websocket.TextMessage || m.Type == websocket.BinaryMessage {
@@ -117,4 +124,22 @@ func (c *ClientConn) WriteMessage(typ int, data []byte) error {
 
 	c.messages <- &msg
 	return <-msg.ack
+}
+
+func (c *ClientConn) MarkClosed(ack chan struct{}) {
+	c.closedMu.Lock()
+	defer c.closedMu.Unlock()
+
+	c.closed = true
+
+	if ack != nil {
+		close(ack)
+	}
+}
+
+func (c *ClientConn) IsClosed() bool {
+	c.closedMu.Lock()
+	defer c.closedMu.Unlock()
+
+	return c.closed
 }
