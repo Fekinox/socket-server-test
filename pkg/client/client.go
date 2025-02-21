@@ -254,7 +254,6 @@ func (c *Client) EnsureConnected() error {
 
 	switch c.connected {
 	case Connected:
-		log.Println("already connected")
 		return nil
 	case ServerDead:
 		return ErrServerDead
