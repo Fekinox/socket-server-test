@@ -10,7 +10,7 @@ import (
 
 type TTTStatus int
 
-type TicTacToeGrid = *grid.Grid[int]
+type TTTGrid = grid.Grid[int]
 
 type ExpandDirection int
 
@@ -34,22 +34,23 @@ const (
 	TTT_INIT_HEIGHT = 4
 )
 
-type TicTacToeState struct {
-	Grid         TicTacToeGrid
+// Tic Tac Toe game state.
+type TTTState struct {
+	Grid         *TTTGrid
 	Turn         int
 	Status       TTTStatus
 	WinningMove  grid.Pos
 	WinningTiles []grid.Pos
 }
 
-func InitialTicTacToeState() *TicTacToeState {
-	return &TicTacToeState{
+func InitialTTTState() *TTTState {
+	return &TTTState{
 		Grid: grid.NewGrid(int(TTT_INIT_WIDTH), int(TTT_INIT_HEIGHT), 0),
 		Turn: 1,
 	}
 }
 
-func findKInARowAt(g TicTacToeGrid, x, y, dx, dy, k int) ([]grid.Pos, bool) {
+func findKInARowAt(g *TTTGrid, x, y, dx, dy, k int) ([]grid.Pos, bool) {
 	if !g.InBounds(x, y) {
 		return nil, false
 	}
@@ -76,7 +77,7 @@ func findKInARowAt(g TicTacToeGrid, x, y, dx, dy, k int) ([]grid.Pos, bool) {
 	return row, true
 }
 
-func allKInARowsAt(g TicTacToeGrid, x, y, k int) [][]grid.Pos {
+func allKInARowsAt(g *TTTGrid, x, y, k int) [][]grid.Pos {
 	var rows [][]grid.Pos
 	for xx := range 3 {
 		dx := xx - 1
@@ -95,7 +96,7 @@ func allKInARowsAt(g TicTacToeGrid, x, y, k int) [][]grid.Pos {
 	return rows
 }
 
-func expand(g TicTacToeGrid, dir ExpandDirection) TicTacToeGrid {
+func expand(g *TTTGrid, dir ExpandDirection) *TTTGrid {
 	var ox, oy int
 	nw, nh := g.Width(), g.Height()
 	switch dir {
@@ -120,15 +121,16 @@ func expand(g TicTacToeGrid, dir ExpandDirection) TicTacToeGrid {
 	})
 }
 
-func NextMove(ts *TicTacToeState, move Move) (*TicTacToeState, error) {
-	nextState := &TicTacToeState{
+func NextMove(ts *TTTState, move Move) (*TTTState, error) {
+	nextState := &TTTState{
 		Turn:   2 - ts.Turn + 1,
 		Status: ts.Status,
 	}
 
 	switch m := move.(type) {
 	case Mark:
-		v, ok := ts.Grid.Get(m.X, m.Y)
+		xx, yy := m.X-1, m.Y-1
+		v, ok := ts.Grid.Get(xx, yy)
 		if !ok {
 			return nil, fmt.Errorf("Position %d %d is out of bounds", m.X, m.Y)
 		}
@@ -136,14 +138,14 @@ func NextMove(ts *TicTacToeState, move Move) (*TicTacToeState, error) {
 			return nil, errors.New("Grid cell is occupied")
 		}
 		nextState.Grid = grid.NewGridWith(ts.Grid.Width(), ts.Grid.Height(), func(x, y int) int {
-			if x == m.X && y == m.Y {
+			if x == xx && y == yy {
 				return ts.Turn
 			}
 			return ts.Grid.MustGet(x, y)
 		})
 
 		// Check for win
-		rows := allKInARowsAt(nextState.Grid, m.X, m.Y, TTT_K)
+		rows := allKInARowsAt(nextState.Grid, xx, yy, TTT_K)
 		if len(rows) > 0 {
 			var posns []grid.Pos
 			for _, r := range rows {
@@ -173,7 +175,7 @@ func NextMove(ts *TicTacToeState, move Move) (*TicTacToeState, error) {
 	return nextState, nil
 }
 
-func (g *TicTacToeState) GameStateToStrings() []string {
+func (g *TTTState) GameStateToStrings() []string {
 	var res []string
 	for y := range g.Grid.Height() {
 		var cur strings.Builder

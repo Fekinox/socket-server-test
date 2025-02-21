@@ -42,7 +42,7 @@ type Lobby struct {
 	Host  string
 	Users []string
 
-	GameState *TicTacToeState
+	GameState *TTTState
 	InGame    bool
 	Player1   string
 	Player2   string
@@ -232,7 +232,7 @@ func (g *GameManager) StartGame(ws *SocketServer, user string) {
 	ws.BroadcastText("starting game", lb.Users...)
 
 	lb.InGame = true
-	lb.GameState = InitialTicTacToeState()
+	lb.GameState = InitialTTTState()
 
 	if rand.Intn(2) == 0 {
 		lb.Player1, lb.Player2 = lb.Users[0], lb.Users[1]
