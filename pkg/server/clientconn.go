@@ -29,7 +29,6 @@ func (c *ClientConn) readPump() {
 
 	c.conn.SetReadDeadline(time.Now().Add(PONG_WAIT_TIME))
 	c.conn.SetPongHandler(func(string) error {
-		log.Println("pong")
 		c.conn.SetReadDeadline(time.Now().Add(PONG_WAIT_TIME))
 		return nil
 	})
@@ -92,7 +91,6 @@ func (c *ClientConn) writePump() {
 			if err != nil {
 				return
 			}
-			log.Println("ping")
 		}
 	}
 }
