@@ -104,6 +104,8 @@ func main() {
 
 	go ws.Run()
 
+	// TODO: make the websocket server simply return an http servemux that can be mounted on a
+	// subroute, kinda like what socket.io does
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
