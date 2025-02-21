@@ -54,13 +54,16 @@ func findKInARowAt(g TicTacToeGrid, x, y, dx, dy, k int) ([]grid.Pos, bool) {
 		return nil, false
 	}
 	first := g.MustGet(x, y)
+	if first == 0 {
+		return nil, false
+	}
 	xx, yy := x, y
 	row := []grid.Pos{{
 		X: x,
 		Y: y,
 	}}
 	for range k - 1 {
-		xx, yy = x+dx, y+dy
+		xx, yy = xx+dx, yy+dy
 		if v, ok := g.Get(xx, yy); !ok || v != first {
 			return nil, false
 		}
@@ -141,7 +144,7 @@ func NextMove(ts *TicTacToeState, move Move) (*TicTacToeState, error) {
 
 		// Check for win
 		rows := allKInARowsAt(nextState.Grid, m.X, m.Y, TTT_K)
-		if len(rows) >= 0 {
+		if len(rows) > 0 {
 			var posns []grid.Pos
 			for _, r := range rows {
 				posns = append(posns, r...)
