@@ -252,10 +252,17 @@ func (g *GameManager) broadcastGameState(ws *SocketServer, lobby string) {
 	for _, l := range lb.GameState.GameStateToStrings() {
 		ws.BroadcastText(l, lb.Users...)
 	}
-	if lb.GameState.Turn == 1 {
-		ws.BroadcastText(fmt.Sprintf("%s's turn", lb.Player1), lb.Users...)
-	} else {
-		ws.BroadcastText(fmt.Sprintf("%s's turn", lb.Player2), lb.Users...)
+	switch lb.GameState.Status {
+	case NotFinished:
+		if lb.GameState.Turn == 1 {
+			ws.BroadcastText(fmt.Sprintf("%s's turn", lb.Player1), lb.Users...)
+		} else {
+			ws.BroadcastText(fmt.Sprintf("%s's turn", lb.Player2), lb.Users...)
+		}
+	case P1Win:
+		ws.BroadcastText(fmt.Sprintf("%s won!", lb.Player1), lb.Users...)
+	case P2Win:
+		ws.BroadcastText(fmt.Sprintf("%s won!", lb.Player2), lb.Users...)
 	}
 }
 
@@ -295,6 +302,11 @@ func (g *GameManager) Move(ws *SocketServer, user string, m Move) {
 
 	lb.GameState = next
 	g.broadcastGameState(ws, lbName)
+
+	if lb.GameState.Status != NotFinished {
+		lb.InGame = false
+		ws.BroadcastText(fmt.Sprintf("Game ended"), lb.Users...)
+	}
 }
 
 func (g *GameManager) GetCurrentGameState(ws *SocketServer, user string) {
