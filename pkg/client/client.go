@@ -295,7 +295,7 @@ func (c *Client) EnsureConnected() error {
 }
 
 func (c *Client) connect(ctx context.Context) error {
-	// Generate a token first
+	// Ask the server for a connection token
 	var buf bytes.Buffer
 	err := json.NewEncoder(&buf).Encode(map[string]any{
 		"username": c.Username,
@@ -336,6 +336,7 @@ func (c *Client) connect(ctx context.Context) error {
 		return err
 	}
 
+	// Connect to the server with the token
 	u := url.URL{
 		Scheme: "ws",
 		Host:   c.Host,
