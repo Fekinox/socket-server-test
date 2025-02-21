@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -262,14 +263,16 @@ func (c *Client) EnsureConnected() error {
 	}
 
 	var err error
-
 	var retryTime = INIT_BACKOFF_TIME_MS
 
 	for range MAX_RETRY_ATTEMPTS {
+		// TODO: make connection non-blocking to allow for cancellation by interrupts
+		ctx := context.Background()
+
 		log.Println("reconnecting...", retryTime)
 		randomTime := rand.Intn(RANDOM_BACKOFF_MAX)
 		timeout := time.After(time.Duration(retryTime+randomTime) * time.Millisecond)
-		err = c.connect()
+		err = c.connect(ctx)
 		if err == nil {
 			log.Println("connected")
 			c.connected = Connected
@@ -291,7 +294,7 @@ func (c *Client) EnsureConnected() error {
 	return ErrTooManyReconnectAttempts
 }
 
-func (c *Client) connect() error {
+func (c *Client) connect(ctx context.Context) error {
 	// Generate a token first
 	var buf bytes.Buffer
 	err := json.NewEncoder(&buf).Encode(map[string]any{
@@ -307,7 +310,13 @@ func (c *Client) connect() error {
 		Path:   "/create-token",
 	}
 
-	resp, err := http.Post(tokenUrl.String(), "application/json", &buf)
+	req, err := http.NewRequestWithContext(ctx, "POST", tokenUrl.String(), &buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
 	log.Println(err)
 	if err != nil {
 		return err
@@ -336,7 +345,7 @@ func (c *Client) connect() error {
 	q.Set("token", token.Token)
 	u.RawQuery = q.Encode()
 
-	c.conn, _, err = websocket.DefaultDialer.Dial(u.String(), nil)
+	c.conn, _, err = websocket.DefaultDialer.DialContext(ctx, u.String(), nil)
 	return err
 }
 
