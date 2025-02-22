@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"math/rand"
 	"net/http"
@@ -48,18 +49,6 @@ const (
 	ClientQuit
 )
 
-func NewClient(host, username string) *Client {
-	return &Client{
-		Host:     host,
-		Username: username,
-
-		inboundMessages:  make(chan message.Message, 256),
-		outboundMessages: make(chan message.Message, 256),
-		errors:           make(chan error, 256),
-		done:             make(chan struct{}),
-	}
-}
-
 type Client struct {
 	Host     string
 	Username string
@@ -73,6 +62,18 @@ type Client struct {
 	outboundMessages chan message.Message
 	errors           chan error
 	done             chan struct{}
+}
+
+func NewClient(host string, port int, username string) *Client {
+	return &Client{
+		Host:     fmt.Sprintf("%s:%d", host, port),
+		Username: username,
+
+		inboundMessages:  make(chan message.Message, 256),
+		outboundMessages: make(chan message.Message, 256),
+		errors:           make(chan error, 256),
+		done:             make(chan struct{}),
+	}
 }
 
 func (c *Client) Run() error {

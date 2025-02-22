@@ -13,13 +13,15 @@ import (
 )
 
 var username = flag.String("username", "foobar", "username")
+var host = flag.String("host", "localhost", "host")
+var port = flag.Int("port", 3000, "port")
 
 func main() {
 	flag.Parse()
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt, os.Kill, syscall.SIGTERM, syscall.SIGINT)
 
-	cl := client.NewClient("localhost:3000", *username)
+	cl := client.NewClient(*host, *port, *username)
 
 	go cl.Run()
 	defer cl.Quit()
