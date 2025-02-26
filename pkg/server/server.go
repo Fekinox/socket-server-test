@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"maps"
@@ -161,6 +162,20 @@ func (s *SocketServer) ServeWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	payload, err := s.TokenManager.ValidateToken(token)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	err = func() error {
+		s.clientsMu.Lock()
+		defer s.clientsMu.Unlock()
+
+		if _, ok := s.usernameMap[payload.Username]; ok {
+			return errors.New("User is already logged in")
+		}
+		return nil
+	}()
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
