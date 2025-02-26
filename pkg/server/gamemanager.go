@@ -52,6 +52,10 @@ func (g *GameManager) NewLobby(ws *SocketServer, host string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	if _, ok := g.UserLobbies[host]; ok {
+		g.removeFromLobby(ws, host)
+	}
+
 	var name string
 	var attempts int
 	for {
