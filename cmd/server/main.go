@@ -97,6 +97,10 @@ func main() {
 		cl.On("gamestate", func(username, body string) {
 			gm.GetCurrentGameState(ws, username)
 		})
+
+		cl.OnAdv("ping", server.MakeHandler(func(username, body string) {
+			cl.WriteTextMessage(fmt.Sprintf("pong: %q", body))
+		}))
 	})
 
 	ws.SetDisconnectHandler(func(cl *server.ClientConn) {

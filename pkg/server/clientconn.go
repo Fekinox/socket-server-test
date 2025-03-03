@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"log"
 	"strings"
 	"sync"
@@ -18,7 +19,8 @@ type ClientConn struct {
 	conn     *websocket.Conn
 	messages chan *AcknowledgedMessage
 
-	handlers map[string]HandlerFunc
+	plainHandlers map[string]HandlerFunc
+	advHandlers   map[string]HandlerFunc
 
 	closed   bool
 	closedMu sync.Mutex
@@ -43,9 +45,20 @@ func (c *ClientConn) readPump() {
 			continue
 		}
 
+		// Try typed handlers first, then plain handlers
+		var typedMsg struct {
+			Ident string          `json:"type"`
+			Data  json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(msg, &typedMsg); err == nil {
+			if h, ok := c.advHandlers[typedMsg.Ident]; ok {
+				h(c.Username, string(typedMsg.Data))
+			}
+		}
+
 		ident, body, _ := strings.Cut(string(msg), " ")
 
-		if h, ok := c.handlers[ident]; ok {
+		if h, ok := c.plainHandlers[ident]; ok {
 			h(c.Username, body)
 		}
 	}
@@ -96,7 +109,22 @@ func (c *ClientConn) writePump() {
 }
 
 func (c *ClientConn) On(ident string, f func(username string, body string)) {
-	c.handlers[ident] = f
+	c.plainHandlers[ident] = f
+}
+
+func (c *ClientConn) OnAdv(ident string, f func(username string, body string)) {
+	c.advHandlers[ident] = f
+}
+
+func MakeHandler[T any](f func(username string, obj T)) HandlerFunc {
+	return func(username, data string) {
+		var obj T
+		if err := json.Unmarshal([]byte(data), &obj); err != nil {
+			return
+		}
+
+		f(username, obj)
+	}
 }
 
 func (c *ClientConn) WriteTextMessage(data string) error {

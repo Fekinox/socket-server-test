@@ -194,7 +194,8 @@ func (s *SocketServer) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 		messages: make(chan *AcknowledgedMessage),
 
-		handlers: make(map[string]HandlerFunc),
+		plainHandlers: make(map[string]HandlerFunc),
+		advHandlers:   make(map[string]HandlerFunc),
 	}
 }
 
